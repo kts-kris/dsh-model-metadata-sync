@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileMetadata as reconcileHostMetadata } from '../lib/safe-reconcile.js';
+import { reconcileMetadata as reconcileHostMetadata, reconcileMetadataForTest } from '../lib/safe-reconcile.js';
 import { normalizeUpstreamCatalog } from '../lib/metadata-source.js';
+import { createReferenceBridgeForTest } from '../lib/reference-catalog.js';
+import { fetchReferenceWorker } from '../lib/reference-worker.js';
+import { createReferenceWorkerControllerForTest } from '../lib/reference-worker-client.js';
+import { EventEmitter } from 'node:events';
 
 // Adapt synthetic rows into an actual immutable normalizer result. These are
 // test fixtures for reconciliation, not a production evidence-minting API.
 const testEndpoint = 'https://gateway.example/v1/models';
 const testProtocol = 'openai-completions';
+function syntheticController(snapshot) {
+  return createReferenceWorkerControllerForTest({ receiptClock: () => '2026-11-25T03:00:00.000Z', createWorker() {
+    const worker = new EventEmitter();
+    queueMicrotask(() => { worker.emit('message', JSON.stringify(snapshot.records)); worker.emit('exit', 0); });
+    return worker;
+  } });
+}
 function trustedFixtureCatalog(rows) {
   const payloadRows = rows.map((row) => ({ id: row.id,
     ...(row.contextWindow?.state === 'known' ? { context: row.contextWindow.value } : {}),
@@ -202,29 +213,38 @@ test('a self-reported reference candidate cannot establish trusted authority', (
   assert.deepEqual(result.changes, []);
 });
 
-// Kept as an executable future contract: self-reported reference identity is not
-// authority until an independently authenticated reference-to-Host bridge exists.
-test.todo('validated exact reference can fill a proven absence within its freshness window', () => {
-  const source = { kind: 'reference', origin: 'https://models.dev/api.json', fetchedAt: '2026-11-25T03:00:00.000Z', headers: { secret: 'discard' } };
-  const identity = { exact: true, unique: true, provider: 'sample', modelId: 'm', protocol: 'openai-completions' };
-  const base = {
-    provider: 'sample', endpoint: testEndpoint, protocol: 'openai-completions', route: { models: [{ id: 'm' }] }, selectedNewIds: [],
-    now: '2026-11-25T04:00:00.000Z',
-    catalog: { status: 'complete', applicable: true, models: [{ id: 'm', contextWindow: {
-      state: 'known', value: 64000, source, referenceIdentity: identity,
-    } }] },
-    effective: { status: 'known', models: [{ id: 'm', fields: { contextWindow: {
-      status: 'absent', evidence: { explicit: 'absent', catalog: 'absent', routeDefault: 'absent' },
-    } } }] },
-  };
-  const result = reconcileHostMetadata(base);
+// All transport, documentation, target binding and clock evidence here is
+// synthetic Host-controlled test data, not proof about a real deployment.
+test('validated exact reference can fill a proven absence within its freshness window', async () => {
+  const fetchedAt = '2026-11-25T03:00:00.000Z';
+  let now = '2026-11-25T04:00:00.000Z';
+  const catalog = trustedFixtureCatalog([{ id: 'm' }]);
+  const snapshot = await fetchReferenceWorker({ clock: () => fetchedAt, transport: async () => new Response(JSON.stringify({
+    sample: { id: 'sample', models: { m: { id: 'm', limit: { context: 64000 } } } },
+  })) });
+  const bridge = createReferenceBridgeForTest({ clock: () => now, controller: syntheticController(snapshot),
+    bindings: [{ provider: 'sample', endpoint: testEndpoint, protocol: testProtocol, modelId: 'm',
+      documentationUrl: 'https://synthetic-docs.example/target', applicability: 'exact-endpoint-model-protocol' }],
+    semantics: [{ source: 'https://models.dev/api.json', documentationUrl: 'https://synthetic-docs.example/source',
+      fields: { contextWindow: { name: 'limit.context', meaning: 'total-context-tokens' } } }],
+  });
+  const capability = await bridge.fetch({ catalog, provider: 'sample', endpoint: testEndpoint, protocol: testProtocol });
+  const absent = { status: 'absent', evidence: { explicit: 'absent', catalog: 'absent', routeDefault: 'absent' } };
+  const base = { provider: 'sample', endpoint: testEndpoint, protocol: testProtocol, catalog, reference: capability,
+    route: { models: [{ id: 'm' }], headers: { secret: 'discard' } }, selectedNewIds: [],
+    effective: { status: 'known', models: [{ id: 'm', fields: { contextWindow: absent, maxTokens: absent } }] } };
+  const result = reconcileMetadataForTest(base);
   assert.deepEqual(result.changes, [{ type: 'set-field', scope: 'models', modelId: 'm', index: 0, field: 'contextWindow', value: 64000 }]);
-  assert.deepEqual(result.items[0].fields[0].source, { kind: 'reference', origin: 'https://models.dev/api.json', fetchedAt: '2026-11-25T03:00:00.000Z' });
+  assert.deepEqual(result.items[0].fields[0].source, { kind: 'reference', origin: 'https://models.dev/api.json', fetchedAt });
   assert.doesNotMatch(JSON.stringify(result), /secret|discard/);
-  for (const options of [
-    { provider: 'Sample' }, { protocol: 'openai-responses' }, { now: '2026-11-26T04:00:00.000Z' },
-    { now: '2026-11-25T02:00:00.000Z' }, { now: null },
-  ]) assert.deepEqual(reconcileHostMetadata({ ...base, ...options }).changes, []);
+  assert.deepEqual(reconcileHostMetadata(base).changes, [], 'synthetic capability is not production authority');
+  for (const options of [{ provider: 'Sample' }, { protocol: 'openai-responses' }]) {
+    assert.deepEqual(reconcileMetadataForTest({ ...base, ...options }).changes, []);
+  }
+  for (const instant of ['2026-11-26T03:00:00.001Z', '2026-11-25T02:00:00.000Z', null]) {
+    now = instant;
+    assert.deepEqual(reconcileMetadataForTest(base).changes, []);
+  }
 });
 
 test('rejects duplicate or malformed identities, incomplete discovery and conflicting list plus overrides', () => {
@@ -327,21 +347,33 @@ test('rejects model arrays with missing entries rather than constructing an ambi
   assert.deepEqual(result.changes, []);
 });
 
-// Until a trusted source-merging bridge exists, a plain conflicting candidate
-// cannot be injected into an immutable normalizer catalog.
-test.todo('distinguishes upstream, reference and conflicting source declarations without leaking private origins', () => {
-  const upstream = { kind: 'upstream', origin: 'https://private-gateway.example', fetchedAt: '2026-11-25T03:00:00.000Z' };
-  const sourceConflict = { state: 'conflicting', value: 12000, source: upstream };
-  const result = reconcileHostMetadata({ provider: 'sample', endpoint: testEndpoint, protocol: testProtocol,
-    route: { models: [{ id: 'm' }] }, selectedNewIds: [],
-    catalog: { status: 'complete', applicable: true, models: [{ id: 'm', contextWindow: sourceConflict }] },
-    effective: { status: 'known', models: [{ id: 'm', fields: { contextWindow: {
-      status: 'absent', evidence: { explicit: 'absent', catalog: 'absent', routeDefault: 'absent' },
-    } } }] },
+test('distinguishes upstream, reference and conflicting source declarations without leaking private origins', async () => {
+  const fetchedAt = '2026-11-25T03:00:00.000Z';
+  const known = value => ({ state: 'known', value });
+  const catalog = trustedFixtureCatalog([{ id: 'm', contextWindow: known(12000), maxTokens: known(4000) }]);
+  const snapshot = await fetchReferenceWorker({ clock: () => fetchedAt, transport: async () => new Response(JSON.stringify({
+    sample: { id: 'sample', models: { m: { id: 'm', limit: { context: 20000, output: 4000 } } } },
+  })) });
+  const bridge = createReferenceBridgeForTest({ clock: () => fetchedAt, controller: syntheticController(snapshot),
+    bindings: [{ provider: 'sample', endpoint: testEndpoint, protocol: testProtocol, modelId: 'm',
+      documentationUrl: 'https://synthetic-docs.example/target', applicability: 'exact-endpoint-model-protocol' }],
+    semantics: [{ source: 'https://models.dev/api.json', documentationUrl: 'https://synthetic-docs.example/source', fields: {
+      contextWindow: { name: 'limit.context', meaning: 'total-context-tokens' },
+      maxTokens: { name: 'limit.output', meaning: 'max-output-tokens' },
+    } }],
   });
-  assert.deepEqual(result.changes, []);
-  assert.equal(result.items[0]?.fields?.[0]?.state, 'conflict');
-  assert.doesNotMatch(JSON.stringify(result), /private-gateway/);
+  const capability = await bridge.fetch({ catalog, provider: 'sample', endpoint: testEndpoint, protocol: testProtocol });
+  const absent = { status: 'absent', evidence: { explicit: 'absent', catalog: 'absent', routeDefault: 'absent' } };
+  const result = reconcileMetadataForTest({ provider: 'sample', endpoint: testEndpoint, protocol: testProtocol,
+    route: { models: [{ id: 'm' }] }, selectedNewIds: [], catalog, reference: capability,
+    effective: { status: 'known', models: [{ id: 'm', fields: { contextWindow: absent, maxTokens: absent } }] } });
+  assert.deepEqual(result.changes, [{ type: 'set-field', scope: 'models', modelId: 'm', index: 0, field: 'maxTokens', value: 4000 }]);
+  const conflict = result.items[0].fields.find(field => field.field === 'contextWindow');
+  assert.equal(conflict.state, 'conflict');
+  assert.equal(conflict.reason, 'source-conflict');
+  assert.equal(conflict.referenceCandidate, 20000);
+  assert.deepEqual(conflict.referenceSource, { kind: 'reference', origin: 'https://models.dev/api.json', fetchedAt });
+  assert.doesNotMatch(JSON.stringify(result), /gateway\.example|synthetic-docs\.example/);
 });
 
 test('accepts a normalizer-verified full wire map but not a partial declaration', () => {
