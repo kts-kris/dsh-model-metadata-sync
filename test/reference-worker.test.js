@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, getEventListeners } from 'node:events';
 import { Worker } from 'node:worker_threads';
-import { createReferenceWorkerControllerForTest, fetchReferenceSnapshot } from '../lib/reference-worker-client.js';
+import { createReferenceWorkerControllerForTest, fetchReferenceSnapshot,
+  fetchReferenceSnapshotWithSignal } from '../lib/reference-worker-client.js';
 
 class FakeClock {
   nowMs = 0;
@@ -50,6 +51,16 @@ function harness() {
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const good = '[{"provider":"synthetic","modelId":"fixture"}]';
 
+test('a previously cancelled owner cannot start a reference worker', async () => {
+  const { controller, workers, clock } = harness();
+  const owner = new AbortController();
+  owner.abort('synthetic-private-reason');
+  assert.equal(typeof controller.fetchWithSignal, 'function', 'trusted Host cancellation seam is available');
+  assert.deepEqual(await controller.fetchWithSignal(owner.signal), { status: 'unknown', records: [], reason: 'aborted' });
+  assert.equal(workers.length, 0);
+  assert.equal(clock.timers.size, 0);
+});
+
 async function fakeExchange(message, exitCode = 0) {
   const { controller, workers } = harness();
   const pending = controller.fetch();
@@ -58,6 +69,137 @@ async function fakeExchange(message, exitCode = 0) {
   workers[0].finishTermination?.(exitCode);
   return pending;
 }
+
+test('owner abort terminates its worker and blocks retry until exit and termination agree', async () => {
+  for (const first of ['exit', 'termination']) {
+    const { controller, workers, clock } = harness();
+    const owner = new AbortController();
+    const pending = controller.fetchWithSignal(owner.signal);
+    workers[0].emit('message', good); // staged is not yet published
+    owner.abort('synthetic-secret');
+    owner.abort('again');
+    assert.equal(workers[0].terminations, 1, 'owner cancellation must immediately terminate its worker');
+    assert.deepEqual(await pending, { status: 'unknown', records: [], reason: 'aborted' });
+    assert.equal(clock.timers.size, 0);
+    workers[0].emit('message', '[{"leak":"late"}]');
+    if (first === 'exit') workers[0].emit('exit', 1);
+    else workers[0].finishTermination(1);
+    await tick();
+    assert.equal((await controller.fetch()).reason, 'busy');
+    if (first === 'exit') workers[0].finishTermination(1);
+    else workers[0].emit('exit', 1);
+    await tick();
+    const retry = controller.fetch();
+    workers[0].emit('message', '[{"leak":"stale"}]');
+    workers[1].emit('message', good);
+    workers[1].emit('exit', 0);
+    assert.deepEqual((await retry).records, [{ provider: 'synthetic', modelId: 'fixture' }]);
+  }
+});
+
+test('startup cancellation terminates after construction, not a later owner', async () => {
+  const clock = new FakeClock();
+  const owner = new AbortController();
+  let worker;
+  const controller = createReferenceWorkerControllerForTest({ clock, createWorker() {
+    owner.abort('disposed');
+    return (worker = new FakeWorker());
+  } });
+  const pending = controller.fetchWithSignal(owner.signal);
+  assert.equal(worker.terminations, 1);
+  assert.equal((await pending).reason, 'aborted');
+  assert.equal((await controller.fetch()).reason, 'busy');
+  worker.emit('message', good);
+  worker.emit('exit', 1);
+  worker.finishTermination(1);
+  await tick();
+  assert.equal(getEventListeners(owner.signal, 'abort').length, 0);
+});
+
+test('signal listeners are cleared when work succeeds, fails or is cancelled', async () => {
+  for (const outcome of ['success', 'error', 'abort']) {
+    const { controller, workers } = harness();
+    const owner = new AbortController();
+    const pending = controller.fetchWithSignal(owner.signal);
+    assert.equal(getEventListeners(owner.signal, 'abort').length, 1);
+    if (outcome === 'success') { workers[0].emit('message', good); workers[0].emit('exit', 0); }
+    if (outcome === 'error') { workers[0].emit('error', new Error('private')); }
+    if (outcome === 'abort') owner.abort();
+    assert.equal((await pending).status, outcome === 'success' ? 'complete' : 'unknown');
+    assert.equal(getEventListeners(owner.signal, 'abort').length, 0);
+    if (outcome !== 'success') { workers[0].emit('exit', 1); workers[0].finishTermination(1); await tick(); }
+    const retry = controller.fetch();
+    owner.abort(); // a disposed/old owner must not terminate a later request
+    assert.equal(workers[1].terminations, 0);
+    workers[1].emit('message', good);
+    workers[1].emit('exit', 0);
+    assert.equal((await retry).status, 'complete');
+  }
+});
+
+test('cancellation accepts only one genuine signal and never forwards it or request data', async () => {
+  const { controller, starts, workers } = harness();
+  const owner = new AbortController();
+  const secret = 'synthetic-secret';
+  const url = 'http://private.example.invalid';
+  for (const args of [[], [undefined], [null], [{}], [{ signal: owner.signal, endpoint: url, authorization: secret }],
+    [new Proxy(owner.signal, {})], [owner.signal, { endpoint: url, authorization: secret }]]) {
+    assert.equal((await controller.fetchWithSignal(...args)).reason, 'invalid-request');
+    assert.equal((await fetchReferenceSnapshotWithSignal(...args)).reason, 'invalid-request');
+  }
+  assert.equal(starts.length, 0);
+  const pending = controller.fetchWithSignal(owner.signal);
+  assert.equal(starts.length, 1);
+  assert.deepEqual(Reflect.ownKeys(starts[0].options).sort(),
+    ['env', 'execArgv', 'resourceLimits', 'stderr', 'stdin', 'stdout'].sort());
+  assert.equal(JSON.stringify(starts).includes(secret), false);
+  assert.equal(JSON.stringify(starts).includes(url), false);
+  owner.abort(secret);
+  assert.equal(JSON.stringify(await pending).includes(secret), false);
+  workers[0].emit('exit', 1); workers[0].finishTermination(1);
+  await tick();
+});
+
+test('only the owner of an admitted flight can cancel it', async () => {
+  const { controller, workers } = harness();
+  const owner = new AbortController();
+  const other = new AbortController();
+  const pending = controller.fetchWithSignal(owner.signal);
+  assert.equal((await controller.fetchWithSignal(other.signal)).reason, 'busy');
+  assert.equal(getEventListeners(other.signal, 'abort').length, 0);
+  other.abort();
+  assert.equal(workers[0].terminations, 0);
+  workers[0].emit('message', good);
+  workers[0].emit('exit', 0);
+  assert.equal((await pending).status, 'complete');
+});
+
+test('abort cannot be suppressed by an earlier signal listener', async () => {
+  const { controller, workers } = harness();
+  const owner = new AbortController();
+  owner.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+  const pending = controller.fetchWithSignal(owner.signal);
+  owner.abort();
+  assert.equal(workers[0].terminations, 1, 'trusted owner must terminate despite stopImmediatePropagation');
+  assert.equal((await pending).reason, 'aborted');
+  workers[0].emit('exit', 1); workers[0].finishTermination(1);
+});
+
+test('abort during final receipt cannot publish a completed snapshot', async () => {
+  const owner = new AbortController();
+  let worker;
+  const controller = createReferenceWorkerControllerForTest({
+    createWorker: () => (worker = new FakeWorker()),
+    receiptClock() { owner.abort('disposed during exit'); throw new Error('private clock failure'); },
+  });
+  const pending = controller.fetchWithSignal(owner.signal);
+  worker.emit('message', good);
+  worker.emit('exit', 0);
+  const result = await pending;
+  assert.deepEqual(result, { status: 'unknown', records: [], reason: 'aborted' });
+  const { referenceSnapshotMatchesController } = await import('../lib/reference-worker-client.js');
+  assert.equal(referenceSnapshotMatchesController(result, controller), false, 'cancelled results never gain authority');
+});
 
 test('publishes one projected JSON result only after clean worker exit', async () => {
   const { controller, workers } = harness();
@@ -356,6 +498,37 @@ test('real isolated worker delivers one record and normally exits', { timeout: 5
   assert.equal(result.status, 'complete');
   assert.equal(observedExit, true);
   assert.equal(result.records[0].modelId, 'fixture');
+});
+
+test('real blocked worker aborts on owner disposal and retry waits for exit', { timeout: 5_000 }, async () => {
+  const workers = [];
+  let workerExit;
+  let onStaged;
+  const staged = new Promise(resolve => { onStaged = resolve; });
+  const controller = createReferenceWorkerControllerForTest({ deadlineMs: 4_000, createWorker(_entry, options) {
+    const source = workers.length === 0
+      ? "const {parentPort} = require('node:worker_threads'); parentPort.postMessage('[{\"phase\":\"staged\"}]'); while (true) {}"
+      : `const {parentPort} = require('node:worker_threads'); parentPort.postMessage(${JSON.stringify(good)});`;
+    const worker = isolatedWorker(source, options);
+    workers.push(worker);
+    if (workers.length === 1) {
+      workerExit = new Promise(resolve => worker.once('exit', resolve));
+      worker.once('message', onStaged);
+    }
+    return worker;
+  } });
+  const owner = new AbortController();
+  const pending = controller.fetchWithSignal(owner.signal);
+  await staged;
+  owner.abort('disposed');
+  assert.deepEqual(await pending, { status: 'unknown', records: [], reason: 'aborted' });
+  // A real Worker must emit exit and resolve terminate consistently; only then
+  // can a second owner be admitted. Do not infer exit from a rejected result.
+  await workerExit;
+  await tick();
+  const retry = await controller.fetch();
+  assert.equal(retry.status, 'complete');
+  assert.equal(workers.length, 2);
 });
 
 test('real blocked worker is terminated and retry waits for confirmed exit', { timeout: 5_000 }, async () => {
