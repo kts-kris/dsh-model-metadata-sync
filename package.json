@@ -44,7 +44,8 @@
     "LICENSE",
     "README.zh.md",
     "README.ru.md",
-    "scripts/check.mjs"
+    "scripts/check.mjs",
+    "test"
   ],
   "dsh": {
     "bundle": {

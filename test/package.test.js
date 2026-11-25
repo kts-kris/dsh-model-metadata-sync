@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, lstatSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, lstatSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,6 +13,12 @@ function withOfflineNpm(run) {
   const temp = realpathSync(tmpdir())
   const owned = mkdtempSync(path.join(temp, 'dsh-package-test-'))
   try {
+    assert.ok(path.isAbsolute(owned))
+    assert.equal(realpathSync(owned), owned)
+    assert.equal(path.dirname(owned), temp)
+    assert.match(path.basename(owned), /^dsh-package-test-/)
+    const mode = statSync(owned).mode
+    assert.equal(mode & 0o077, 0, 'temporary package directory must be private')
     const home = path.join(owned, 'home')
     mkdirSync(home)
     return run({
@@ -175,6 +181,46 @@ test('a syntactically valid client still cannot bypass unfinished authority or i
   assert.match(output, /T49 real DSH.*INCONCLUSIVE/i)
 }))
 
+test('the locally packed tarball contains executable named behavioral tests', () => withOfflineNpm(env => {
+  const owned = env.DSH_PACKAGE_FIXTURE_ROOT
+  const result = spawnSync('npm', ['pack', '--json', '--ignore-scripts', '--offline', '--pack-destination', owned], {
+    cwd: root, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
+  })
+  assert.equal(result.error, undefined, String(result.error))
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const reports = JSON.parse(result.stdout)
+  assert.equal(reports.length, 1)
+  assert.equal(reports[0].name, 'dsh-model-metadata-sync')
+  const archiveName = reports[0].filename
+  assert.match(archiveName, /^dsh-model-metadata-sync-[A-Za-z0-9.+-]+\.tgz$/)
+  const archive = path.join(owned, archiveName)
+  assert.equal(lstatSync(archive).isFile(), true)
+  assert.equal(path.dirname(realpathSync(archive)), owned)
+  const listing = spawnSync('tar', ['-tzf', archive], { cwd: owned, env, encoding: 'utf8', timeout: 30000 })
+  assert.equal(listing.error, undefined, String(listing.error))
+  assert.equal(listing.status, 0, listing.stderr)
+  const entries = listing.stdout.trim().split('\n')
+  assert.ok(entries.length > 0)
+  for (const entry of entries) {
+    assert.ok(entry.startsWith('package/'), `archive outside package root: ${entry}`)
+    assertSafePath(entry.slice('package/'.length))
+  }
+  assert.ok(entries.includes('package/test/identity.test.js'))
+  const extraction = spawnSync('tar', ['-xzf', archive, '-C', owned], { cwd: owned, env, encoding: 'utf8', timeout: 30000 })
+  assert.equal(extraction.error, undefined, String(extraction.error))
+  assert.equal(extraction.status, 0, extraction.stderr)
+  const packedRoot = realpathSync(path.join(owned, 'package'))
+  assert.equal(path.dirname(packedRoot), owned)
+  const verified = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/identity.test.js'], {
+    cwd: packedRoot, env, encoding: 'utf8', timeout: 30000,
+  })
+  assert.equal(verified.error, undefined, String(verified.error))
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr)
+  assert.match(verified.stdout, /^# tests [1-9]\d*$/m)
+  assert.match(verified.stdout, /^# pass [1-9]\d*$/m)
+  for (const key of ['fail', 'cancelled', 'skipped', 'todo']) assert.match(verified.stdout, new RegExp(`^# ${key} 0$`, 'm'))
+}))
+
 test('offline npm pack contains the independent DSH bundle and only safe paths', () => withOfflineNpm(env => {
   const result = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
@@ -190,7 +236,7 @@ test('offline npm pack contains the independent DSH bundle and only safe paths',
   for (const name of [
     'package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/index.d.ts', 'lib/client.js', 'lib/client.d.ts',
     'README.md', 'README.zh.md', 'README.ru.md', 'LICENSE', 'icon.svg', 'locale/en.json', 'locale/zh.json',
-    'scripts/check.mjs',
+    'scripts/check.mjs', 'test/identity.test.js', 'test/package.test.js',
   ]) assert.ok(files.includes(name), `packed file missing: ${name}`)
   assert.equal(manifest.name, 'dsh-model-metadata-sync')
   assert.equal(manifest.main, './lib/index.js')
