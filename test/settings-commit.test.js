@@ -195,6 +195,161 @@ test('a nonempty explicit model list appends only selected unique IDs in approve
   ])
 })
 
+test('appends selected models when a user-only route is absent from a readable base provider map', async () => {
+  const f = fixture()
+  f.state.section.providers.sample.models.push({ id: 'old-2', custom: { keep: null } })
+  const describe = f.settings.describe
+  f.settings.describe = options => {
+    const rows = describe(options)
+    rows[0].base = { providers: {} }
+    return rows
+  }
+  const plan = structuredClone(f.approved)
+  plan.selectedNewIds = ['new-a', 'new-b']
+  plan.changes = [
+    { type: 'add-model', modelId: 'new-a' },
+    { type: 'add-model', modelId: 'new-b' },
+  ]
+  freeze(plan)
+  const commit = f.makeCommit({ recompute: async ({ revision }) => ({ plan, evidence: { revision, fields: [] } }) })
+
+  assert.deepEqual(await commit(plan), { status: 'applied' })
+  assert.deepEqual(f.state.calls, [{ ns: 'llm-pi-ai', expected: 7, ops: [
+    { op: 'set', path: ['providers', 'sample', 'models', '2'], value: { id: 'new-a' } },
+    { op: 'set', path: ['providers', 'sample', 'models', '3'], value: { id: 'new-b' } },
+  ] }])
+  assert.deepEqual(f.state.section, { providers: { sample: { models: [
+    { id: 'old', input: null, reasoningEfforts: false, opaque: { keep: false } },
+    { id: 'old-2', custom: { keep: null } }, { id: 'new-a' }, { id: 'new-b' },
+  ], headers: { authorization: 'synthetic-secret' } } }, unrelated: { keep: null } })
+  assert.doesNotMatch(JSON.stringify(f.state.calls), /synthetic-secret|authorization|headers|opaque|custom/)
+})
+
+function singleAddition(f) {
+  const plan = structuredClone(f.approved)
+  plan.selectedNewIds = ['new']
+  plan.changes = [{ type: 'add-model', modelId: 'new' }]
+  freeze(plan)
+  return { plan, commit: f.makeCommit({ recompute: async ({ revision }) => ({ plan, evidence: { revision, fields: [] } }) }) }
+}
+
+test('readable absent base roots and present empty routes allow explicit-list additions', async t => {
+  for (const [name, base] of [
+    ['empty root', {}],
+    ['empty provider map', { providers: {} }],
+    ['null-prototype records', Object.assign(Object.create(null), { providers: Object.create(null) })],
+    ['present empty route', { providers: { sample: {} } }],
+  ]) await t.test(name, async () => {
+    const f = fixture(), describe = f.settings.describe
+    f.settings.describe = options => { const rows = describe(options); rows[0].base = base; return rows }
+    const { plan, commit } = singleAddition(f)
+    assert.deepEqual(await commit(plan), { status: 'applied' })
+    assert.deepEqual(f.state.section.providers.sample.models, [
+      { id: 'old', input: null, reasoningEfforts: false, opaque: { keep: false } }, { id: 'new' },
+    ])
+    assert.deepEqual(f.state.calls, [{ ns: 'llm-pi-ai', expected: 7,
+      ops: [{ op: 'set', path: ['providers', 'sample', 'models', '1'], value: { id: 'new' } }] }])
+  })
+})
+
+test('unknown base paths and explicit overrides fail closed without invoking accessors or traps', async t => {
+  for (const [name, change] of [
+    ['missing descriptor base', d => { delete d.base }],
+    ['undefined base', d => { d.base = undefined }],
+    ['null base', d => { d.base = null }],
+    ['array base', d => { d.base = [] }],
+    ['getter base', (d, touched) => { Object.defineProperty(d, 'base', { get() { touched(); return {} } }) }],
+    ['proxy base', (d, touched) => { d.base = new Proxy({}, { getPrototypeOf() { touched(); return Object.prototype } }) }],
+    ['null parent', d => { d.base = { providers: null } }],
+    ['array parent', d => { d.base = { providers: [] } }],
+    ['getter parent', (d, touched) => {
+      d.base = {}; Object.defineProperty(d.base, 'providers', { get() { touched(); return {} } })
+    }],
+    ['proxy parent', (d, touched) => { d.base = { providers: new Proxy({}, { getOwnPropertyDescriptor() { touched() } }) } }],
+    ['nonenumerable parent', d => { d.base = {}; Object.defineProperty(d.base, 'providers', { value: {} }) }],
+    ['null route', d => { d.base = { providers: { sample: null } } }],
+    ['array route', d => { d.base = { providers: { sample: [] } } }],
+    ['getter route', (d, touched) => {
+      Object.defineProperty(d.base.providers, 'sample', { get() { touched(); return {} } })
+    }],
+    ['proxy route', (d, touched) => {
+      d.base.providers.sample = new Proxy({}, { getPrototypeOf() { touched(); return Object.prototype } })
+    }],
+    ['nonenumerable route', d => { Object.defineProperty(d.base.providers, 'sample', { value: {}, enumerable: false }) }],
+    ['empty inherited override', d => { d.base.providers.sample.modelOverrides = {} }],
+    ['empty user override', d => { d.user.providers.sample.modelOverrides = {} }],
+  ]) await t.test(name, async () => {
+    const f = fixture(), describe = f.settings.describe
+    let touches = 0
+    f.settings.describe = options => { const rows = describe(options); change(rows[0], () => { touches++ }); return rows }
+    const { plan, commit } = singleAddition(f)
+    assert.deepEqual(await commit(plan), { error: { code: 'SETTINGS_UNAVAILABLE' } })
+    assert.deepEqual(f.state.calls, [])
+    assert.deepEqual(f.state.section.providers.sample.models, [
+      { id: 'old', input: null, reasoningEfforts: false, opaque: { keep: false } },
+    ])
+    assert.equal(touches, 0)
+  })
+})
+
+test('a user-only route still requires matching nonempty explicit and effective model identities', async t => {
+  for (const [name, change] of [
+    ['missing user models', d => { delete d.user.providers.sample.models }],
+    ['empty user models', d => { d.user.providers.sample.models = [] }],
+    ['different effective identity', d => { d.value.providers.sample.models[0].id = 'other' }],
+    ['different effective length', d => { d.value.providers.sample.models.push({ id: 'other' }) }],
+    ['different effective order', d => {
+      d.user.providers.sample.models.push({ id: 'other' }); d.value.providers.sample.models.unshift({ id: 'other' })
+    }],
+  ]) await t.test(name, async () => {
+    const f = fixture(), describe = f.settings.describe
+    f.settings.describe = options => {
+      const rows = describe(options); rows[0].base = { providers: {} }; change(rows[0]); return rows
+    }
+    const { plan, commit } = singleAddition(f)
+    assert.deepEqual(await commit(plan), { error: { code: 'SETTINGS_UNAVAILABLE' } })
+    assert.deepEqual(f.state.calls, [])
+  })
+})
+
+test('a user-only route retains writer and opposite-capacity guards', async () => {
+  for (const scenario of ['active original writer', 'configured opposite capacity']) {
+    const f = fixture(), describe = f.settings.describe
+    f.settings.describe = options => { const rows = describe(options); rows[0].base = {}; return rows }
+    if (scenario === 'active original writer') {
+      f.pluginManager.listPlugins = async () => [{ moduleName: '@goodandready/dsh-model-sync', enabled: true, fiberPhase: null }]
+      const { plan, commit } = singleAddition(f)
+      assert.deepEqual(await commit(plan), { error: { code: 'ORIGINAL_WRITER_ACTIVE' } })
+    } else {
+      f.state.section.providers.sample.models[0].maxTokens = 128000
+      assert.deepEqual(await f.commit(f.approved), { error: { code: 'SETTINGS_UNAVAILABLE' } })
+    }
+    assert.deepEqual(f.state.calls, [], scenario)
+  }
+})
+
+test('a user-only route retries a proven no-write conflict with the new revision', async () => {
+  const f = fixture({ proveNoWriteConflict: () => true }), describe = f.settings.describe
+  f.settings.describe = options => { const rows = describe(options); rows[0].base = { providers: {} }; return rows }
+  const mutate = f.settings.mutate
+  let first = true
+  f.settings.mutate = async (...args) => {
+    if (first) {
+      first = false
+      f.state.calls.push({ ns: args[0], ops: structuredClone(args[1]), expected: args[2] })
+      f.state.section.unrelated.keep = 'concurrent edit'
+      f.state.revision++
+      throw new FakeSettingsConflictError(args[2], f.state.revision)
+    }
+    return mutate(...args)
+  }
+  const { plan, commit } = singleAddition(f)
+  assert.deepEqual(await commit(plan), { status: 'applied' })
+  assert.deepEqual(f.state.calls.map(call => call.expected), [7, 8])
+  assert.equal(f.state.section.unrelated.keep, 'concurrent edit')
+  assert.deepEqual(f.state.section.providers.sample.models.map(model => model.id), ['old', 'new'])
+})
+
 test('a claimed absent counterpart cannot override an actually configured opposite capacity', async () => {
   const f = fixture()
   f.state.section.providers.sample.models[0].maxTokens = 128000
