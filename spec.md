@@ -81,7 +81,7 @@ On install and every restart, the plugin never triggers unattended model writes,
 
 For success, error, timeout and redirect responses, send upstream credentials only to the configured upstream origin (scheme, host and port), never to a reference source, cross-origin redirect, HTTP downgrade, client, logs, or diagnostics. Reject unauthenticated, cross-origin and CSRF attempts on state-changing local HTTP routes; render untrusted IDs as text. Bound configured upstream requests to 15 seconds per request, 4 MiB per response, 20 pages, and three retries. The sole fixed anonymous models.dev reference snapshot has a 16 MiB body limit and a 15-second absolute worker deadline with the stricter resource, identity and failure rules in change-reference-snapshot.md.
 
-**Proof:** test: `node --test test/network-safety.test.js test/reference-worker.test.js`.
+**Proof:** test: `node --test test/network-safety.test.js test/reference-worker.test.js test/host-security.test.js test/real-host-admission.test.js`; the real Host carrier test requires the installed DSH runtime and a synthetic verifier, and does not prove production cookie verification.
 ### AC-9: [MUST] [ADDED]
 
 Given the original plugin is installed, when the fork is installed, enabled, used, disabled, or restarted, its package, module, private settings namespace, HTTP routes, private state, updater and UI identifiers never collide with or mutate the original's private state. Both may read shared DSH provider configuration. If the original plugin may concurrently write the same provider, the fork must refuse its apply and ask the user to pause the original; it must not disable the original itself. Revision conflicts among cooperating writers must preserve both users' changes.
