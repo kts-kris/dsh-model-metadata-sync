@@ -60,6 +60,38 @@ test('models endpoint canonicalization is stable for root, base and explicit pat
   ]) assert.equal(configuredModelsEndpoint({ baseURL }), expected);
 });
 
+test('official OpenRouter trust is exact and isolated from reconciliation', async (t) => {
+  const endpoint = 'https://openrouter.ai/api/v1/models';
+  const base = { provider: 'custom-provider', api: 'openai-completions', baseURL: endpoint, models: [{ id: 'vendor/model' }] };
+  const listing = { data: [{ id: 'vendor/model', context_length: 128000 }], links: { next: null }, total_count: 1 };
+  for (const configured of [endpoint, 'https://openrouter.ai/api/v1', 'https://openrouter.ai/api/v1/']) {
+    const fake = transport([json(listing)]);
+    const catalog = await factory(fake, []).discover({ ...base, baseURL: configured });
+    assert.equal(catalog.status, 'complete');
+    assert.equal(catalog.applicable, false);
+    assert.equal(catalog.models[0].contextWindow.value, 128000);
+    assert.equal(catalogMatchesTarget(catalog, { provider: base.provider, endpoint, protocol: base.api }), false);
+    const plan = reconcileMetadata({ provider: base.provider, endpoint, protocol: base.api,
+      route: { models: [{ id: 'vendor/model' }] }, catalog, selectedNewIds: [], effective: { status: 'known', models: [] } });
+    assert.equal(plan.status, 'refused');
+  }
+  for (const configured of [endpoint + '/', endpoint + '?limit=1', 'https://OPENROUTER.ai/api/v1/models',
+    'https://openrouter.ai:443/api/v1/models', 'https://openrouter.ai/api/v1/../v1/models']) {
+    await t.test(configured, async () => {
+      const fake = transport([json(listing)]);
+      const catalog = await factory(fake, []).discover({ ...base, baseURL: configured });
+      assert.equal(catalog.status, 'failed');
+      assert.equal(fake.calls.length, 0);
+    });
+  }
+  const redirect = transport([redirection('/api/v1/models')]);
+  assert.equal((await factory(redirect, []).discover(base)).status, 'failed');
+  assert.equal(redirect.calls.length, 1);
+  const anonymous = transport([json(listing)]);
+  assert.equal((await factory(anonymous, []).discover(base)).status, 'complete');
+  assert.equal(new Headers(anonymous.calls[0].options.headers).has('authorization'), false);
+});
+
 // All tests use the actual public adapter entry with fake transport only.
 test('configured exact gateway wins over the known provider hardcoded endpoint', async () => {
   const fake = transport([json({ data: [rawModel] })]);

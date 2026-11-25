@@ -53,6 +53,7 @@ export interface PresentedPreview {
   })[];
   warnings: string[];
   sources: { name: string; kind: string; status: string; reason: string; lastAttemptAt: string; origin: string; fetchedAt: string }[];
+  displayOnly: boolean;
   canReview: boolean;
 }
 

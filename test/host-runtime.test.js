@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHostRuntime } from '../lib/host-runtime.js'
 import { catalogMatchesTarget } from '../lib/metadata-source.js'
+import { normalizeOpenRouterCatalog } from '../lib/openrouter-metadata.js'
 
 // All paths, credentials, Host services, and transport data are synthetic.
 const SECRET = 'synthetic-bearer-0123456789'
@@ -80,6 +81,40 @@ test('read-only discovery uses the exact configured source and credential, retai
   assert.ok(state.resolves.length >= 1 && state.resolves.every(ref => ref === REF))
   assert.ok(state.describes.every(options => options?.redactSecrets === true))
   assert.equal(state.writes, 0)
+})
+
+test('discovery owns its exact catalog; a same-target forged normalizer result cannot replace it', async () => {
+  const f = fakeHost()
+  const endpoint = 'https://openrouter.ai/api/v1/models'
+  f.state.section.providers.sample.baseURL = 'https://openrouter.ai/api/v1'
+  f.state.respond = () => new Response(JSON.stringify({ data: [{ id: 'old', context_length: 1024 }],
+    links: { next: null }, total_count: 1 }))
+  const result = await f.runtime.discover('sample')
+  assert.equal(result.status, 'complete')
+  const original = result.catalog
+  const before = f.runtime.project(result, 'sample', [])
+  assert.equal(before.status, 'complete')
+  assert.equal(before.items[0].fields.find(field => field.field === 'contextWindow').candidate, 1024)
+  const forged = normalizeOpenRouterCatalog({ provider: 'sample', protocol, endpoint,
+    source: { kind: 'upstream', origin: 'https://openrouter.ai', fetchedAt: '2026-11-25T03:00:00.000Z' },
+    payload: { data: [{ id: 'old', context_length: 999999 }] }, responseComplete: true, existingModelIds: ['old'] })
+  assert.equal(forged.status, 'complete')
+  let replacementRejected = false
+  try { result.catalog = forged } catch { replacementRejected = true }
+  const substituted = f.runtime.project(result, 'sample', [])
+  if (replacementRejected) {
+    assert.strictEqual(result.catalog, original)
+    assert.equal(substituted.status, 'complete')
+    assert.equal(substituted.items[0].fields.find(field => field.field === 'contextWindow').candidate, 1024)
+  } else {
+    assert.equal(substituted.status, 'failed')
+    assert.equal(code(substituted), 'INVALID_RESPONSE')
+  }
+  assert.equal(Object.isFrozen(result), true)
+  assert.equal(Object.isFrozen(result.effective), true)
+  assert.equal(f.state.requests.length, 1)
+  assert.equal(f.state.writes, 0)
+  assert.equal(JSON.stringify(substituted).includes(SECRET), false)
 })
 
 test('status is a safe projection of a configured, registered provider, not a descriptor or catalog', async () => {

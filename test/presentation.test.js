@@ -162,6 +162,29 @@ test('unknown inherited catalog identities remain visible but cannot be selected
   assert.deepEqual(Array.from(controller.snapshot().selected), [])
 })
 
+test('closing a display-only preview requires no cancellation request', async () => {
+  const { exports: client } = shippedClient()
+  let cancellations = 0
+  const controller = client.createController({
+    getStatus: async () => ({ providers: [{ id: 'p' }], referenceEnabled: false }),
+    preview: async (_provider, selectedNewIds) => ({ provider: 'p', revision: 1, expiresAt: '2030-01-01T00:00:00Z',
+      writeEnabled: false, authority: 'unavailable', selectedNewIds,
+      items: [{ modelId: 'new', existing: false, reason: selectedNewIds.length ? 'selected' : 'not-selected', fields: [] }],
+      changes: selectedNewIds.map(modelId => ({ type: 'add-model', modelId })) }),
+    cancel: async () => { cancellations++; throw Error('display-only previews have no token') },
+  }, () => {}, () => Date.parse('2026-11-25T03:00:00Z'))
+  await controller.loadStatus(); controller.chooseProvider('p'); await controller.preview()
+  controller.selectNew('new', true); await controller.preview()
+  assert.ok(controller.snapshot().preview)
+  const page = renderPage(controller)
+  assert.match(page.text, /display-only/i)
+  assert.doesNotMatch(page.text, /Request a fresh preview before applying\./i)
+  await controller.cancelPreview()
+  assert.equal(cancellations, 0)
+  assert.equal(controller.snapshot().preview, null)
+  assert.equal(controller.snapshot().error, '')
+})
+
 test('an unknown inventory cannot authorize a claimed new-model addition', () => {
   const { exports: client } = shippedClient()
   const data = {

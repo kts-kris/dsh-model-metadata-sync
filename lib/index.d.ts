@@ -33,5 +33,5 @@ export declare function createForkReferenceSettings(
   config?: { referenceEnabled?: boolean | { get(): unknown } } | null,
 ): ForkReferenceSettings;
 
-/** Registers reserved routes; this does not provide a preview/apply authority. */
+/** Registers the fork's routes; only confirmed additions to supported explicit model lists are writable. */
 export declare function apply(ctx: Context, config: ModelSyncConfig): void;

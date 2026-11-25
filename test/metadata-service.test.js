@@ -140,17 +140,186 @@ test('end-to-end deadline frees a stalled credential slot, ignoring its late res
   assert.deepEqual(f.state.requests, [])
 })
 
+test('aborted plugin checks retain their owner quota across service instances until each settles', async () => {
+  const a = fixture(), b = fixture()
+  const releases = []
+  const list = () => new Promise(resolve => { releases.push(resolve) })
+  a.pluginManager.listPlugins = b.pluginManager.listPlugins = list
+  const turn = () => new Promise(resolve => setImmediate(resolve))
+  async function abortApply(f) {
+    const p = await preview(f)
+    assert.ok(p.previewId, 'preview is independently authorized')
+    const controller = new AbortController()
+    const applying = f.service.apply(OWNER, { previewId: p.previewId, digest: p.digest }, controller.signal)
+    await turn()
+    controller.abort()
+    assert.ok((await applying).error, 'aborted or capacity-denied apply fails closed')
+  }
+  try {
+    for (let i = 0; i < 12; i++) await abortApply(i % 2 ? b : a)
+    assert.equal(releases.length, 4, 'twelve aborted applies cannot start more than four pending Host calls')
+    releases[0]([])
+    await turn()
+    await abortApply(b)
+    assert.equal(releases.length, 5, 'settling one call admits exactly one replacement')
+    await abortApply(a)
+    assert.equal(releases.length, 5, 'the remaining pending calls still consume their own permits')
+    releases[0]([])
+    await turn()
+    await abortApply(b)
+    assert.equal(releases.length, 5, 'repeated settlement of an old call cannot release another permit')
+  } finally {
+    a.service.unload(); b.service.unload()
+    for (const release of releases) release([])
+    await turn()
+  }
+  assert.deepEqual(a.state.calls, [], 'aborted applies never dispatch a write')
+  assert.deepEqual(b.state.calls, [], 'late completions never dispatch a write')
+})
+
+test('timed-out plugin checks retain their owner quota across service instances', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const a = fixture(), b = fixture()
+  const releases = []
+  const list = () => new Promise(resolve => { releases.push(resolve) })
+  a.pluginManager.listPlugins = b.pluginManager.listPlugins = list
+  const turn = () => new Promise(resolve => setImmediate(resolve))
+  async function timeOutApply(f) {
+    const p = await preview(f)
+    assert.ok(p.previewId)
+    const pending = apply(f, p)
+    await turn()
+    t.mock.timers.tick(15000)
+    assert.ok((await pending).error)
+  }
+  try {
+    for (let i = 0; i < 8; i++) await timeOutApply(i % 2 ? b : a)
+    assert.equal(releases.length, 4, 'deadlines do not release unresolved Host calls')
+    releases[0]([])
+    await turn()
+    await timeOutApply(b)
+    await timeOutApply(a)
+    assert.equal(releases.length, 5, 'one late settlement permits exactly one replacement')
+  } finally {
+    a.service.unload(); b.service.unload()
+    for (const release of releases) release([])
+    await turn()
+  }
+  assert.deepEqual(a.state.calls, [])
+  assert.deepEqual(b.state.calls, [])
+})
+
+test('plugin checks enforce a global pending-call limit across owners and instances', async () => {
+  const a = fixture({ authorizeOwner: () => true }), b = fixture({ authorizeOwner: () => true })
+  const releases = []
+  const list = () => new Promise(resolve => { releases.push(resolve) })
+  a.pluginManager.listPlugins = b.pluginManager.listPlugins = list
+  const turn = () => new Promise(resolve => setImmediate(resolve))
+  async function abortApply(f, owner) {
+    const p = await f.service.preview(owner, { provider: 'sample', selectedNewIds: ['new-a'] })
+    assert.ok(p.previewId)
+    const controller = new AbortController()
+    const pending = f.service.apply(owner, { previewId: p.previewId, digest: p.digest }, controller.signal)
+    await turn(); controller.abort()
+    assert.ok((await pending).error)
+  }
+  try {
+    for (let i = 0; i < 33; i++) await abortApply(i % 2 ? b : a, Object.freeze({ i }))
+    assert.equal(releases.length, 32, 'a 33rd owner does not start another pending Host call')
+    releases[0]([])
+    await turn()
+    await abortApply(b, Object.freeze({ i: 33 }))
+    assert.equal(releases.length, 33, 'one settled call permits one new call globally')
+    await abortApply(a, Object.freeze({ i: 34 }))
+    assert.equal(releases.length, 33, 'all other pending calls keep their permits')
+  } finally {
+    a.service.unload(); b.service.unload()
+    for (const release of releases) release([])
+    await turn()
+  }
+  assert.deepEqual(a.state.calls, [])
+  assert.deepEqual(b.state.calls, [])
+})
+
+test('plugin manager synchronous throws and asynchronous rejections release their permits', async () => {
+  for (const mode of ['throw', 'reject']) {
+    const f = fixture()
+    let calls = 0
+    f.pluginManager.listPlugins = () => {
+      calls++
+      if (mode === 'throw') throw Error('synthetic failure')
+      return Promise.reject(Error('synthetic failure'))
+    }
+    for (let i = 0; i < 6; i++) {
+      const p = await preview(f)
+      assert.ok((await apply(f, p)).error, `${mode} fails closed`)
+    }
+    assert.equal(calls, 6, `${mode} does not exhaust four permits`)
+    assert.deepEqual(f.state.calls, [], `${mode} never authorizes a write`)
+    f.pluginManager.listPlugins = async () => []
+    assert.equal((await apply(f, await preview(f))).status, 'applied', `${mode} leaves later valid work usable`)
+    assert.equal(f.state.calls.length, 1)
+    f.service.unload()
+  }
+})
+
+test('a late plugin rejection frees only its own permit without a write', async () => {
+  const f = fixture()
+  const pending = []
+  f.pluginManager.listPlugins = () => new Promise((resolve, reject) => { pending.push({ resolve, reject }) })
+  const turn = () => new Promise(resolve => setImmediate(resolve))
+  async function abortApply() {
+    const p = await preview(f)
+    const controller = new AbortController()
+    const applying = f.service.apply(OWNER, { previewId: p.previewId, digest: p.digest }, controller.signal)
+    await turn(); controller.abort()
+    assert.ok((await applying).error)
+  }
+  try {
+    for (let i = 0; i < 4; i++) await abortApply()
+    pending[0].reject(Error('synthetic late rejection'))
+    await turn()
+    await abortApply()
+    await abortApply()
+    assert.equal(pending.length, 5, 'one rejected Host call admits one replacement, not two')
+  } finally {
+    f.service.unload()
+    for (const item of pending) item.resolve([])
+    await turn()
+  }
+  assert.deepEqual(f.state.calls, [])
+})
+
+test('an apply aborted before plugin dispatch never starts the Host call', async () => {
+  const f = fixture(); const p = await preview(f)
+  let calls = 0
+  f.pluginManager.listPlugins = () => { calls++; return [] }
+  const controller = new AbortController()
+  const applying = f.service.apply(OWNER, { previewId: p.previewId, digest: p.digest }, controller.signal)
+  controller.abort()
+  assert.ok((await applying).error)
+  assert.equal(calls, 0)
+  assert.deepEqual(f.state.calls, [])
+  f.service.unload()
+})
+
 test('deadline cancels a stalled plugin check before mutation', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(); const p = await preview(f)
-  let entered
+  let entered, release
   const reached = new Promise(resolve => { entered = resolve })
-  f.pluginManager.listPlugins = () => { entered(); return new Promise(() => {}) }
+  f.pluginManager.listPlugins = () => { entered(); return new Promise(resolve => { release = resolve }) }
   const applying = apply(f, p)
-  await reached
-  t.mock.timers.tick(15000)
-  assert.ok((await applying).error)
-  assert.deepEqual(f.state.calls, [])
+  try {
+    await reached
+    t.mock.timers.tick(15000)
+    assert.ok((await applying).error)
+    assert.deepEqual(f.state.calls, [])
+  } finally {
+    f.service.unload()
+    release?.([])
+    await applying
+  }
 })
 
 test('no confirmation, wrong owner, and concurrent repeat cannot create additional writes', async () => {

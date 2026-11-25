@@ -60,6 +60,7 @@ function fakeHost() {
     referenceEnabled: false, baseRoute: {},
     network: [], referenceCalls: [], writes: [], referenceResult: { status: 'complete', records: [{ provider: PROVIDER, modelId: 'new-a', observedLimitContext: 65536 }] },
     beforeReply: () => {}, beforeReference: () => {}, descriptor: value => value,
+    expectedURL: `${BASE}/models`, payload: null, rawPayload: null,
   }
   const services = {
     llm: {
@@ -84,9 +85,9 @@ function fakeHost() {
   const referenceSettings = { getReferenceEnabled: () => state.referenceEnabled }
   const fetchImpl = async (url, options) => {
     state.network.push({ url: String(url), options })
-    assert.equal(String(url), `${BASE}/models`, 'transport rejects any other network target')
+    assert.equal(String(url), state.expectedURL, 'transport rejects any other network target')
     await state.beforeReply()
-    return new Response(JSON.stringify({ data: state.rows }), { headers: { 'content-type': 'application/json' } })
+    return new Response(state.rawPayload ?? JSON.stringify(state.payload ?? { data: state.rows }), { headers: { 'content-type': 'application/json' } })
   }
   workerState = state
   const disposers = registerHttpApi(ctx, {}, { referenceSettings, fetchImpl })
@@ -130,6 +131,83 @@ test('authenticated route previews the real Host discovery of multiple models wi
   assert.deepEqual(f.state.writes, [])
   assert.deepEqual(f.services.modelSync, { sentinel: 'original-untouched' })
   for (const secret of [BASE, SECRET, 'FAKE_SECRET', 'do-not-expose', 'baseURL', 'custom']) assert.equal(response.text.includes(secret), false)
+})
+
+test('OpenRouter official listing reaches the read-only HTTP preview with scoped evidence', async () => {
+  const f = fakeHost()
+  f.state.route.baseURL = 'https://openrouter.ai/api/v1'
+  f.state.expectedURL = 'https://openrouter.ai/api/v1/models'
+  f.state.route.models = [{ id: 'vendor/model' }]
+  f.state.payload = { data: [
+    { id: 'vendor/model', context_length: 128000, top_provider: { max_completion_tokens: 8192 },
+      reasoning: { mandatory: false, supported_efforts: ['low', 'high'] } },
+    { id: 'vendor/model~latest', context_length: 999999 },
+  ], links: { next: null }, total_count: 2 }
+  const response = await call(f, '/preview')
+  assert.equal(response.status, 200, response.text)
+  const [model, alias] = response.body.items
+  assert.equal(model.modelId, 'vendor/model')
+  assert.equal(model.existing, true)
+  const context = model.fields.find(field => field.field === 'contextWindow')
+  const output = model.fields.find(field => field.field === 'maxTokens')
+  const effort = model.fields.find(field => field.field === 'reasoningEfforts')
+  assert.equal(context.candidate, 128000)
+  assert.equal(context.state, 'unknown')
+  assert.deepEqual(output.candidate, { value: 8192, scope: 'top-provider', applicable: false })
+  assert.equal(output.state, 'unknown')
+  assert.deepEqual(effort.candidate, { values: ['low', 'high'], scope: 'gateway-declared', applicable: false })
+  assert.equal(effort.state, 'unknown')
+  for (const field of [context, output, effort]) {
+    assert.equal(field.source.kind, 'upstream')
+    assert.equal(field.source.origin, 'https://openrouter.ai')
+    assert.equal(field.source.url, f.state.expectedURL)
+    assert.ok(/^\d{4}-\d\d-\d\dT.*Z$/.test(field.source.fetchedAt))
+  }
+  assert.equal(alias.fields.find(field => field.field === 'contextWindow').candidate, undefined)
+  assert.equal(response.body.writeEnabled, false)
+  assert.equal(response.body.authority, 'unavailable')
+  assert.deepEqual(response.body.changes, [])
+  assert.deepEqual(f.state.referenceCalls, [])
+  assert.deepEqual(f.state.writes, [])
+  for (const secret of [SECRET, 'FAKE_SECRET']) assert.equal(response.text.includes(secret), false)
+})
+
+test('OpenRouter incomplete listings and reflected secrets never reach preview', async t => {
+  const row = { id: 'vendor/model', context_length: 1024 }
+  for (const [name, rawPayload] of [
+    ['pagination', JSON.stringify({ data: [row], links: { next: '?offset=1' }, total_count: 1 })],
+    ['wrong count', JSON.stringify({ data: [row], links: { next: null }, total_count: 2 })],
+    ['unknown pagination', JSON.stringify({ data: [row], links: { next: null }, total_count: 1, offset: 1 })],
+    ['error', JSON.stringify({ data: [row], links: { next: null }, total_count: 1, errors: ['failure'] })],
+    ['duplicate keys', '{"data":[{"id":"vendor/model","\\u0069d":"other"}],"links":{"next":null},"total_count":1}'],
+    ['duplicate ids', JSON.stringify({ data: [row, row], links: { next: null }, total_count: 2 })],
+    ['reflected endpoint', JSON.stringify({ data: [{ id: 'https://openrouter.ai/api/v1/models' }], links: { next: null }, total_count: 1 })],
+    ['reflected bearer', JSON.stringify({ data: [{ id: SECRET }], links: { next: null }, total_count: 1 })],
+    ['reflected candidate', JSON.stringify({ data: [{ id: 'vendor/model', reasoning: { mandatory: false, supported_efforts: ['openrouter.ai'] } }], links: { next: null }, total_count: 1 })],
+  ]) await t.test(name, async () => {
+    const f = fakeHost()
+    f.state.route.baseURL = 'https://openrouter.ai/api/v1'
+    f.state.expectedURL = 'https://openrouter.ai/api/v1/models'
+    f.state.rawPayload = rawPayload
+    const response = await call(f, '/preview')
+    assert.notEqual(response.status, 200, response.text)
+    assert.equal('items' in response.body, false)
+    assert.equal(response.text.includes(SECRET), false)
+    assert.deepEqual(f.state.writes, [])
+    assert.deepEqual(f.state.referenceCalls, [])
+  })
+})
+
+test('fixed official provenance cannot reflect a short bearer', async () => {
+  const f = fakeHost()
+  f.state.route.baseURL = 'https://openrouter.ai/api/v1'
+  f.state.expectedURL = 'https://openrouter.ai/api/v1/models'
+  f.services.credentials.resolve = async () => ({ value: 'openrouter.ai' })
+  f.state.payload = { data: [{ id: 'model', context_length: 1024 }], links: { next: null }, total_count: 1 }
+  const response = await call(f, '/preview')
+  assert.notEqual(response.status, 200)
+  assert.equal(response.text.includes('openrouter.ai'), false)
+  assert.deepEqual(f.state.writes, [])
 })
 
 test('selection is explicitly previewed in upstream order but never authorizes apply', async () => {
