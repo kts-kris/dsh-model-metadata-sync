@@ -1,7 +1,7 @@
 {
-  "name": "@goodandready/dsh-model-sync",
-  "version": "0.5.33",
-  "description": "Automatic model catalog synchronization for API-key DeepSeek Harness providers.",
+  "name": "dsh-model-metadata-sync",
+  "version": "0.1.0",
+  "description": "Model metadata synchronization fork of GooDAnDReaDY/dsh-model-sync for DeepSeek Harness.",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -12,11 +12,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/GooDAnDReaDY/dsh-model-sync.git"
+    "url": "https://github.com/kts-kris/dsh-model-metadata-sync.git"
   },
-  "homepage": "https://github.com/GooDAnDReaDY/dsh-model-sync",
+  "homepage": "https://github.com/kts-kris/dsh-model-metadata-sync",
   "bugs": {
-    "url": "https://github.com/GooDAnDReaDY/dsh-model-sync/issues"
+    "url": "https://github.com/kts-kris/dsh-model-metadata-sync/issues"
   },
   "type": "module",
   "main": "./lib/index.js",
@@ -51,16 +51,6 @@
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-settings"
       ]
-    },
-    "compatibility": {
-      "dshReleases": {
-        "0.2.0-rc.2": "compatible",
-        "0.2.1-rc.2": "compatible",
-        "0.2.1-rc.3": "compatible",
-        "0.2.1-rc.4": "compatible",
-        "0.2.2-rc.5": "compatible"
-      },
-      "dsh": "0.2.0-rc.2 || >=0.2.1-rc.2 <0.3.0-0"
     }
   },
   "scripts": {
@@ -74,7 +64,7 @@
   "license": "MIT",
   "engines": {
     "node": ">=20",
-    "dsh": "0.2.0-rc.2 || >=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.3-alpha.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

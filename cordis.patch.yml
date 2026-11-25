@@ -1,4 +1,4 @@
-# Bundle entry for the public DSH model synchronization plugin.
+# Bundle entry for the DSH model metadata synchronization fork.
 - insert:
-    - id: dsh-model-sync
-      name: '@goodandready/dsh-model-sync'
+    - id: dsh-model-metadata-sync
+      name: 'dsh-model-metadata-sync'
