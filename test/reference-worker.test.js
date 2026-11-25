@@ -120,7 +120,7 @@ test('only a fixed entry and isolated 128/16/4 MiB worker options are started', 
   workers[0].emit('exit', 1);
   await pending;
   assert.equal(starts.length, 1);
-  assert.equal(starts[0].entry.href, new URL('../lib/reference-worker.js', import.meta.url).href);
+  assert.equal(starts[0].entry.href, new URL('../lib/reference-worker-entry.js', import.meta.url).href);
   assert.deepEqual(starts[0].options.resourceLimits, {
     maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4,
   });
