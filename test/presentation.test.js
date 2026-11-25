@@ -153,6 +153,18 @@ test('unknown inherited catalog identities remain visible but cannot be selected
   assert.deepEqual(Array.from(controller.snapshot().selected), [])
 })
 
+test('an unknown inventory cannot authorize a claimed new-model addition', () => {
+  const { exports: client } = shippedClient()
+  const data = {
+    provider: 'p', previewId: 'id', digest: 'digest', revision: 1,
+    expiresAt: '2030-01-01T00:00:00Z', writeEnabled: true,
+    selectedNewIds: ['uncertain'],
+    items: [{ modelId: 'uncertain', existing: null, reason: 'inventory-unknown', fields: [] }],
+    changes: [{ type: 'add-model', modelId: 'uncertain' }], warnings: [],
+  }
+  assert.equal(client.presentPreview(data).canReview, false)
+})
+
 test('a changed field requires its exact source class and a canonical valid UTC retrieval time', () => {
   const { exports: client } = shippedClient()
   const validSources = [
