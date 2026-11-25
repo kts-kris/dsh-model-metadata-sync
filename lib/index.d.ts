@@ -23,7 +23,7 @@ export declare function plainConfig<T>(value: T): PlainConfig<T>;
 
 export interface ForkReferenceSettings {
   getReferenceEnabled(): boolean;
-  setReferenceEnabled(enabled: boolean): Promise<void>;
+  setReferenceEnabled(enabled: boolean, signal?: AbortSignal): Promise<void>;
   dispose(): void;
 }
 
