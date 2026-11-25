@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { Readable } from 'node:stream'
+import { EventEmitter } from 'node:events'
+import { PassThrough, Readable } from 'node:stream'
 import { registerMetadataAuthority } from '../lib/routes/metadata-authority.js'
 
 // Entirely synthetic Host services and transport: no profile, network or secrets.
@@ -12,7 +13,7 @@ const OWNER = Object.freeze({})
 const OTHER = Object.freeze({})
 const livePeer = (key = 'owner') => ({ principal: { kind: 'owner' }, signal: new AbortController().signal, key })
 
-function fixture({ safety = () => true, ownerFromPeer = p => p.key === 'owner' ? OWNER : p.key === 'other' ? OTHER : null } = {}) {
+function fixture({ safety = () => true, fetchImpl, ownerFromPeer = p => p.key === 'owner' ? OWNER : p.key === 'other' ? OTHER : null } = {}) {
   const state = {
     revision: 7,
     user: { providers: { sample: { api: 'openai-completions', baseURL: BASE, apiKeyEnv: REF,
@@ -47,11 +48,11 @@ function fixture({ safety = () => true, ownerFromPeer = p => p.key === 'owner' ?
   }
   const dispose = registerMetadataAuthority(ctx, {
     ownerFromPeer, previewSafety: safety,
-    fetchImpl: async (url, options) => {
+    fetchImpl: fetchImpl ?? (async (url, options) => {
       assert.equal(String(url), `${BASE}/models`)
       state.requests.push({ url: String(url), authorization: new Headers(options.headers).get('authorization') })
       return new Response(JSON.stringify({ data: state.rows }), { headers: { 'content-type': 'application/json' } })
-    },
+    }),
   })
   return { state, services, routes, dispose }
 }
@@ -70,6 +71,136 @@ async function call(f, suffix, { text, chunks, method = 'POST', headers = {}, pe
 }
 const preview = (f, extra) => call(f, '/preview', { text: JSON.stringify({ provider: 'sample', selectedNewIds: ['new-a', 'new-b'] }), ...extra })
 const confirm = (f, p, extra) => call(f, '/apply', { text: JSON.stringify({ previewId: p.previewId, digest: p.digest }), ...extra })
+
+// Model Node's distinct request-body and response lifetimes at the registered
+// Host handler seam; the Peer remains live when the HTTP connection closes.
+function eventedCall(f, suffix, body, peer = livePeer()) {
+  const route = f.routes.get(FORK + suffix)
+  assert.ok(route, suffix)
+  const req = new PassThrough()
+  Object.assign(req, { method: 'POST', headers: { origin: 'http://127.0.0.1:3000',
+    'sec-fetch-site': 'same-origin', 'content-type': 'application/json' } })
+  const response = { text: '' }
+  const res = new EventEmitter()
+  Object.assign(res, { writableFinished: false, destroyed: false,
+    writeHead(status, headers) {
+      if (!this.destroyed) { response.status = status; response.headers = headers }
+      return this
+    },
+    end(text = '') {
+      if (this.destroyed) return this
+      response.text += text
+      this.writableFinished = true
+      this.emit('finish')
+      this.emit('close')
+      return this
+    },
+  })
+  const requestClosed = new Promise(resolve => req.once('close', resolve))
+  const pending = Promise.resolve(route.handler(req, res, peer)).then(() => {
+    if (response.text) response.body = JSON.parse(response.text)
+    return response
+  })
+  req.end(Buffer.from(JSON.stringify(body)))
+  return { req, res, requestClosed, pending, peer }
+}
+async function promptly(promise, timeout = 200) {
+  let timer
+  try { return await Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve(null), timeout) })]) }
+  finally { clearTimeout(timer) }
+}
+const turn = () => new Promise(resolve => setImmediate(resolve))
+
+test('body close is normal, but response disconnect during plugin check prevents a late write', async () => {
+  const f = fixture()
+  const p = (await preview(f)).body
+  let entered, release
+  const reached = new Promise(resolve => { entered = resolve })
+  const waiting = new Promise(resolve => { release = resolve })
+  f.services.pluginManager.listPlugins = async () => { entered(); await waiting; return [] }
+  const request = eventedCall(f, '/apply', { previewId: p.previewId, digest: p.digest })
+  try {
+    await reached
+    await request.requestClosed // request body ended; response is still pending
+    assert.equal(request.peer.signal.aborted, false)
+    assert.equal(await promptly(request.pending, 25), null, 'normal request close must not cancel confirmation')
+    request.res.destroyed = true
+    request.res.emit('close')
+    const result = await promptly(request.pending)
+    assert.ok(result, 'response disconnect must end the handler while the Host check is stalled')
+    assert.equal(result.status, undefined, 'destroyed response must not deliver a status')
+    assert.equal(result.text, '', 'destroyed response must not deliver a body')
+    assert.deepEqual(f.state.calls, [])
+    assert.equal((await confirm(f, p)).body.error.code, 'REPREVIEW_REQUIRED')
+  } finally {
+    release()
+    await request.pending
+    await turn()
+    f.dispose()
+  }
+  assert.deepEqual(f.state.calls, [], 'a late plugin check must never dispatch a write')
+})
+
+test('response disconnect after dispatch delivers nothing and the token remains single-use', async () => {
+  const f = fixture()
+  const p = (await preview(f)).body
+  const mutate = f.services.settings.mutate
+  let entered, release
+  const reached = new Promise(resolve => { entered = resolve })
+  const waiting = new Promise(resolve => { release = resolve })
+  f.services.settings.mutate = async (...args) => { entered(); await waiting; return mutate(...args) }
+  const request = eventedCall(f, '/apply', { previewId: p.previewId, digest: p.digest })
+  try {
+    await reached
+    await request.requestClosed
+    request.res.destroyed = true
+    request.res.emit('close')
+    const result = await promptly(request.pending)
+    assert.ok(result, 'response disconnect must not wait for the dispatched mutation')
+    assert.equal(result.status, undefined, 'destroyed response must not deliver a status')
+    assert.equal(result.text, '', 'destroyed response must not deliver a body')
+    assert.deepEqual(f.state.calls, [])
+    assert.equal((await confirm(f, p)).body.error.code, 'REPREVIEW_REQUIRED')
+  } finally {
+    release()
+    await request.pending
+    await turn()
+    f.dispose()
+  }
+  assert.equal(f.state.calls.length, 1, 'late Host completion must not be retried')
+})
+
+test('finished responses close normally and do not prevent the confirmed write', async t => {
+  const f = fixture(); t.after(() => f.dispose())
+  const p = await eventedCall(f, '/preview', { provider: 'sample', selectedNewIds: ['new-a'] }).pending
+  assert.equal(p.status, 200, p.text)
+  const result = await eventedCall(f, '/apply', { previewId: p.body.previewId, digest: p.body.digest }).pending
+  assert.equal(result.body.status, 'applied')
+  assert.equal(f.state.calls.length, 1)
+})
+
+test('response disconnect aborts the active transport signal', async () => {
+  let entered, transportSignal
+  const reached = new Promise(resolve => { entered = resolve })
+  const f = fixture({ fetchImpl: (_url, options) => {
+    transportSignal = options.signal
+    entered()
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error('cancelled')), { once: true }))
+  } })
+  const request = eventedCall(f, '/preview', { provider: 'sample', selectedNewIds: ['new-a'] })
+  try {
+    await reached
+    await request.requestClosed
+    request.res.destroyed = true
+    request.res.emit('close')
+    assert.equal(transportSignal.aborted, true)
+    const result = await promptly(request.pending)
+    assert.ok(result, 'response disconnect must end the handler')
+    assert.equal(result.status, undefined)
+    assert.equal(result.text, '')
+    assert.deepEqual(f.state.calls, [])
+  } finally { await request.pending; f.dispose() }
+})
 
 test('registered owner preview and confirmation append exactly the selected IDs', async t => {
   const f = fixture(); t.after(() => f.dispose())
