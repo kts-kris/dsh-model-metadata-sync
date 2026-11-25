@@ -7,7 +7,7 @@ Last updated: 2026-11-24
 ## Architecture and compatibility
 - Preserve the MIT upstream license and retain attribution to GooDAnDReaDY; disclose the fork and its changes.
 - Build an independently identified DSH bundle, compatible with the installed DSH 0.2.3-alpha.2 API, with a separate package name, loader row, client identity, HTTP routes, storage, and updater target.
-- Keep working original capabilities unless they conflict with explicitly approved safety constraints. Explicitly document any removed, disabled, or changed behavior.
+- Per explicit user approval, retain only model discovery, reference metadata, preview, confirmation, and safe DSH configuration writeback. Remove or disable inherited pricing, Ollama management, active probes, webhooks, auto-updater and unsafe rollback; document these removals.
 - Keep plugin files, documentation, and tests inside this project. Never edit a user's profile file, secrets, or other installed plugins directly.
 
 ## Stack

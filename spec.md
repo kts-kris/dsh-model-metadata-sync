@@ -1,6 +1,6 @@
 # Model metadata synchronization fork
 
-Status: Planned
+Status: In Progress
 Version: 1.0.0
 Last updated: 2026-11-24
 Mode: Delta
@@ -19,6 +19,7 @@ Fork the upstream DSH model synchronization plugin as `dsh-model-metadata-sync`.
 - Where a model has no configured maximum output value, writing a verified missing value is permitted, with an explicit warning that this changes DSH's default request output limit.
 - Background discovery may run, but every configuration change requires preview and confirmation. If the original plugin can write the same provider, refuse the fork's apply and ask the user to pause the original; do not modify it automatically.
 - Nonofficial reference lookup is enabled by default; it must disclose the provider/model/protocol identifiers it may use, never transmit credentials or private upstream addresses, and can be disabled.
+- The user approved a core-only fork: retain model discovery, reference metadata, preview, confirmation and safe DSH writeback; remove pricing, Ollama management, active probing, webhooks, auto-updating and unsafe rollback.
 
 ## Boundaries
 
@@ -138,6 +139,6 @@ Stop if: A model setting, source identity, credential boundary, concurrent updat
 - A nonofficial reference's retrieval timestamp measures local fetch age, not upstream freshness; absent upstream version metadata must be disclosed, not presented as proof of source currency. Nonofficial reference lookup is enabled by default per user decision and may disclose provider, model, and protocol identity to that source, but never the private endpoint or credential. The UI must disclose that behavior and offer a switch to disable it. Persist provenance separately from DSH model fields where schema requires it.
 - Read failure while resolving inherited state means unknown, not absent; do not apply any field whose effective prior value cannot be determined. Explicit null, empty collections and false count as configured. A full upstream model list with duplicate IDs is rejected, not partially applied.
 - User-confirmed new-model additions to an explicit list preserve the existing sequence, then append approved unique IDs in upstream order. For inherited catalogs, new IDs remain visible but unsupported for write until safe preservation is proven. Preview identifies capacity disagreements and effective-source uncertainties. Preview confirmation must name the exact diff.
-- Preserved upstream behaviors include manual discovery, previews, model picker, and optional scheduling; price synchronization and active probing are independent, opt-in and disclosed. Unsafe historical rollback is disabled unless made complete and conflict-safe. The old project's update mechanism must never update or remove the original plugin.
+- Preserved upstream behaviors are limited to manual discovery, previews, model selection and optional read-only scheduling. Pricing synchronization, Ollama management, active probes, webhooks, auto-updating and historical rollback are removed or disabled and documented. The old project's update mechanism must never update or remove the original plugin.
 - The user completed npm authentication in a user-controlled terminal; `npm whoami` reported `kts2kris` on 2026-11-25. Publishing rights for the chosen package name have not yet been exercised; never request passwords or OTPs in chat.
 - Actual acceptance by the catalog after its repository-age gate and human review is external. PR submission, merge, npm publication and inclusion in the user's particular Discover index are separate reported states.
