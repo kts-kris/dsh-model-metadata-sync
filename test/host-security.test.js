@@ -143,7 +143,7 @@ if (process.env.METADATA_SECURITY_CHILD !== '1') {
       const valid = await invoke(route)
       const authorityPaths = ['/preview', '/apply', '/preview/cancel', '/status', '/reference-settings']
         .map(suffix => `/dsh-model-metadata-sync${suffix}`)
-      assert.equal(valid.status, authorityPaths.includes(route.path) ? 503 : 410, route.path)
+      assert.equal(valid.status, route.path === '/dsh-model-metadata-sync/status' ? 405 : authorityPaths.includes(route.path) ? 503 : 410, route.path)
       const invalid = await invoke(route, { origin: 'https://attacker.invalid' })
       assert.equal(invalid.status, 403, route.path)
       assert.equal(invalid.body.error.code, 'ORIGIN_REFUSED', route.path)

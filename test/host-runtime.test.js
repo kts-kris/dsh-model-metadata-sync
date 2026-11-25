@@ -21,7 +21,8 @@ function fakeHost() {
     respond: () => json([{ id: 'old' }, { id: 'new' }]),
   }
   const ctx = {
-    llm: { listConfigurableProviders: () => state.directory, stream: () => { state.writes++ } },
+    get(name) { return this[name] },
+    llm: { listConfigurableProviders: () => state.directory, listProviders: () => [{ id: 'sample', name: 'Sample' }], stream: () => { state.writes++ } },
     settings: {
       describe: options => { state.describes.push(options); return [{ ns: 'llm-pi-ai', value: state.section, revision: state.revision, secrets: state.secrets }] },
       mutate: () => { state.writes++ }, update: () => { state.writes++ }, replace: () => { state.writes++ },
@@ -36,6 +37,33 @@ function fakeHost() {
 }
 
 const code = result => result?.error?.code
+
+test('status reads optional services without touching uninjected Cordis properties', async () => {
+  const f = fakeHost()
+  let directAccesses = 0
+  const ctx = {
+    get(name) { return f.ctx[name] },
+    get llm() { directAccesses++; throw Error('llm is not injected') },
+    get settings() { directAccesses++; throw Error('settings is not injected') },
+  }
+  const status = await createHostRuntime(ctx).status()
+  assert.deepEqual(status, { status: 'available', providers: [{ id: 'sample', status: 'unknown', lastAttemptAt: null }] })
+  assert.equal(directAccesses, 0)
+})
+
+test('discovery reads all optional services without touching uninjected Cordis properties', async () => {
+  const f = fakeHost()
+  let directAccesses = 0
+  const ctx = {
+    get(name) { return f.ctx[name] },
+    get llm() { directAccesses++; throw Error('llm is not injected') },
+    get settings() { directAccesses++; throw Error('settings is not injected') },
+    get credentials() { directAccesses++; throw Error('credentials is not injected') },
+  }
+  const result = await createHostRuntime(ctx, { fetchImpl: async () => json([{ id: 'old' }]) }).discover('sample')
+  assert.equal(result.status, 'complete')
+  assert.equal(directAccesses, 0)
+})
 
 test('read-only discovery uses the exact configured source and credential, retaining Host catalog identity', async () => {
   const { runtime, state } = fakeHost()
@@ -54,12 +82,12 @@ test('read-only discovery uses the exact configured source and credential, retai
   assert.equal(state.writes, 0)
 })
 
-test('status is a safe directory count, not a descriptor or a false empty catalog', async () => {
+test('status is a safe projection of a configured, registered provider, not a descriptor or catalog', async () => {
   const { runtime, state } = fakeHost()
   state.directory[0].private = { authorization: SECRET, endpoint: BASE }
   const status = await runtime.status()
-  assert.deepEqual(status, { status: 'available', directoryCount: 1, providerIdsWithheld: true, previewAvailable: false })
-  assert.doesNotMatch(JSON.stringify(status), /sample|relay|synthetic|authorization|baseURL|credential/i)
+  assert.deepEqual(status, { status: 'available', providers: [{ id: 'sample', status: 'unknown', lastAttemptAt: null }] })
+  assert.doesNotMatch(JSON.stringify(status), /relay|synthetic|authorization|baseURL|credential/i)
   assert.deepEqual(state.requests, [])
   assert.deepEqual(state.resolves, [])
   assert.equal(state.writes, 0)
