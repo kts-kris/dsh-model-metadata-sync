@@ -65,6 +65,15 @@ test('status uses only the independently named fork endpoint', async () => {
   assert.deepEqual(requests, [['/dsh-model-metadata-sync/status', 'GET']])
 })
 
+test('an unknown write outcome instructs the user to inspect settings before retrying', async () => {
+  const response = () => ({ ok: false, status: 409, text: async () => JSON.stringify({ error: { code: 'OUTCOME_UNKNOWN' } }) })
+  const direct = createModelSyncApiClient({ fetchImpl: async () => response() })
+  await assert.rejects(direct.apply('preview', 'digest'), /outcome is unknown.*check.*settings.*retry/i)
+  const { exports: client } = shippedClient()
+  const browser = client.createModelSyncApiClient({ fetchImpl: async () => response() })
+  await assert.rejects(browser.apply('preview', 'digest'), /outcome is unknown.*check.*settings.*retry/i)
+})
+
 test('manual operations have the exact contract bodies and no retired routes', async () => {
   const requests = []
   const api = createModelSyncApiClient({ fetchImpl: async (url, init) => {
