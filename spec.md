@@ -69,9 +69,9 @@ Given two sessions modify configuration concurrently, when a revision conflict o
 **Proof:** test: `node --test test/concurrency.test.js`.
 ### AC-6: [MUST] [MODIFIED]
 
-Given a network error, invalid JSON, empty list, size limit, incomplete pagination, truncation, unknown provider, invalid numeric value, unsupported effort, or ambiguous source, then the affected source reports unknown or failed and cannot drive configuration changes or deletions; other providers can proceed only on separately complete responses.
+Given a network error, invalid JSON, empty list, size limit, incomplete pagination, truncation, unknown provider, invalid numeric value, unsupported effort, or ambiguous source, then the affected source reports unknown or failed and cannot drive configuration changes or deletions; other providers can proceed only on separately complete responses. For the fixed public reference snapshot only, a complete and identity-unambiguous document may retain an invalid individual model as an unknown tombstone while unrelated independently valid identities remain candidates; structural or unassignable identity ambiguity fails the affected scope or whole source as described in change-reference-snapshot.md.
 
-**Proof:** test: `node --test test/metadata-sources.test.js test/concurrency.test.js test/sync-integration.test.js`.
+**Proof:** test: `node --test test/metadata-sources.test.js test/concurrency.test.js test/sync-integration.test.js test/reference-worker.test.js`.
 ### AC-7: [MUST] [MODIFIED]
 
 On install and every restart, the plugin never triggers unattended model writes, paid inference or automatic rollback. Background discovery may run but each write requires a fresh preview and explicit confirmation of exactly that diff; no scheduler, updater or history action bypasses confirmation. Real inference requires explicit consent per action with a potential-cost warning.
@@ -79,9 +79,9 @@ On install and every restart, the plugin never triggers unattended model writes,
 **Proof:** test: `node --test test/defaults.test.js test/sync-integration.test.js`.
 ### AC-8: [MUST] [MODIFIED]
 
-For success, error, timeout and redirect responses, send upstream credentials only to the configured upstream origin (scheme, host and port), never to a reference source, cross-origin redirect, HTTP downgrade, client, logs, or diagnostics. Reject unauthenticated, cross-origin and CSRF attempts on state-changing local HTTP routes; render untrusted IDs as text. Bound each request to 15 seconds, a 4 MiB response, 20 pages, and three retries.
+For success, error, timeout and redirect responses, send upstream credentials only to the configured upstream origin (scheme, host and port), never to a reference source, cross-origin redirect, HTTP downgrade, client, logs, or diagnostics. Reject unauthenticated, cross-origin and CSRF attempts on state-changing local HTTP routes; render untrusted IDs as text. Bound configured upstream requests to 15 seconds per request, 4 MiB per response, 20 pages, and three retries. The sole fixed anonymous models.dev reference snapshot has a 16 MiB body limit and a 15-second absolute worker deadline with the stricter resource, identity and failure rules in change-reference-snapshot.md.
 
-**Proof:** test: `node --test test/network-safety.test.js`.
+**Proof:** test: `node --test test/network-safety.test.js test/reference-worker.test.js`.
 ### AC-9: [MUST] [ADDED]
 
 Given the original plugin is installed, when the fork is installed, enabled, used, disabled, or restarted, its package, module, private settings namespace, HTTP routes, private state, updater and UI identifiers never collide with or mutate the original's private state. Both may read shared DSH provider configuration. If the original plugin may concurrently write the same provider, the fork must refuse its apply and ask the user to pause the original; it must not disable the original itself. Revision conflicts among cooperating writers must preserve both users' changes.

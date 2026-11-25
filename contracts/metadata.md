@@ -16,7 +16,7 @@ Explicit existing configuration, explicit provider-level defaults, and known inh
 
 ## Preview
 
-A preview has a provider, settings revision, model identities, source records, new/existing model distinction, before/effective value, candidate value, applicable/unknown/conflict reason, approved new-model selection and a stable digest of the exact diff. An empty/error/truncated/partial-paginated or duplicate-ID response is non-applicable. No preview mutates user model configuration.
+A preview has a provider, settings revision, model identities, source records, new/existing model distinction, before/effective value, candidate value, applicable/unknown/conflict reason, approved new-model selection and a stable digest of the exact diff. An empty/error/truncated/partial-paginated or duplicate-ID response is non-applicable. A fully parsed, identity-unambiguous reference snapshot may contain explicit unknown tombstones for individual invalid models; these cannot be selected and do not invalidate independently valid, unambiguous models. No preview mutates user model configuration.
 
 ## Apply
 
@@ -24,7 +24,7 @@ Only the exact preview digest and user-selected additions may be applied. Preser
 
 ## Security boundary
 
-- Max 15-second request, 4 MiB body, 20 pages and three retries; abort and retain prior state on any incomplete result.
+- Configured upstream: maximum 15 seconds per request, 4 MiB body per response, 20 pages and three retries; abort and retain prior state on any incomplete result. Only the exact fixed anonymous `GET https://models.dev/api.json` reference snapshot may use a 16 MiB actual-body cap, with no redirects/credentials/private headers and the 15-second absolute worker deadline, identity encoding, worker/IPC bounds, scope-specific tombstones and fail-closed conditions in `change-reference-snapshot.md`. The amendment does not relax any other source.
 - Credentials remain in DSH Host; no redirect to a different `(scheme, host, port)` may receive credentials; reference fetching must never receive the private upstream URL or credentials.
 - Unauthenticated or cross-origin state-changing HTTP calls are refused by the DSH host's required-auth access controls plus a post-admission CSRF defense binding the browser Origin's scheme, host and port to the proven public origin. Host authority checking alone does not compare scheme; where the external origin behind a proxy cannot be established, fail closed. Test same-authority cross-scheme and missing Fetch-Metadata. Malicious IDs are data, never executable markup or filesystem paths.
 - No implicit paid inference. Manual capability testing requires an explicit action and billing warning.
