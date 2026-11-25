@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model metadata sync",
+    "description": "Development fork for model metadata synchronization. Discovery, reference lookup, preview and confirmed apply are not yet available; see the README for the planned safety limits."
+  }
+}

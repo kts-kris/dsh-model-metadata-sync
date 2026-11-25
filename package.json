@@ -19,6 +19,7 @@
     "url": "https://github.com/kts-kris/dsh-model-metadata-sync/issues"
   },
   "type": "module",
+  "icon": "./icon.svg",
   "main": "./lib/index.js",
   "exports": {
     ".": {
@@ -30,15 +31,20 @@
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
     "lib",
     "cordis.patch.yml",
+    "icon.svg",
+    "locale",
     "README.md",
     "LICENSE",
     "README.zh.md",
-    "README.ru.md"
+    "README.ru.md",
+    "scripts/check.mjs"
   ],
   "dsh": {
     "bundle": {
@@ -55,11 +61,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "dts-check": "node scripts/check-declarations.mjs",
-    "docs-check": "node scripts/check-docs-version.mjs",
-    "build:check": "node scripts/build-client.mjs --check",
-    "check": "npm run build:check && npm run dts-check && npm run docs-check && node scripts/check-dead-exports.mjs && npm test",
-    "build": "node scripts/build-client.mjs"
+    "check": "node scripts/check.mjs"
   },
   "license": "MIT",
   "engines": {

@@ -1,197 +1,33 @@
-# 📦 @goodandready/dsh-model-sync
+# dsh-model-metadata-sync
 
-<div align="center">
+[English](README.md) · [中文](README.zh.md) · [Русский](README.ru.md)
 
-<h3>Dynamic LLM Model Catalog Synchronization & Automated Balance Monitoring for DeepSeek Harness</h3>
+A development fork of [GooDAnDReaDY/dsh-model-sync](https://github.com/GooDAnDReaDY/dsh-model-sync), intended to help users review model metadata for configured DeepSeek Harness (DSH) providers. This is not a renamed release of the upstream plugin.
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/@goodandready/dsh-model-sync"><img src="https://img.shields.io/npm/v/@goodandready/dsh-model-sync.svg?style=for-the-badge&color=6366f1&labelColor=1e1b4b" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge&color=10b981&labelColor=064e3b" alt="license"></a>
-  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-Plugin-8b5cf6.svg?style=for-the-badge&labelColor=2e1065" alt="DSH Plugin"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-20%2B-f59e0b.svg?style=for-the-badge&labelColor=451a03" alt="Node version"></a>
-</p>
+## Status: not ready to use
 
-<p align="center">
-  <a href="https://goodandready.app/"><img src="https://img.shields.io/badge/All_Author_Projects-goodandready.app-ff4500.svg?style=for-the-badge&logo=rocket&logoColor=white&labelColor=1a1a2e" alt="All Author Projects"></a>
-</p>
+The core discovery, reference lookup, user-facing preview and safe apply flow are **not yet connected**. The current Host reserves the intended routes: after authorization they return `AUTHORITY_UNAVAILABLE` rather than performing those operations. Legacy synchronization, including dry-run, is disabled; background discovery is also disabled. Do not rely on old client controls as evidence that an action works. No package installation, public release, catalog inclusion or end-to-end safety of this development revision is asserted here.
 
-<p align="center">
-  <a href="README.md"><b>🇬🇧 English</b></a> •
-  <a href="README.ru.md"><b>🇷🇺 Русский</b></a> •
-  <a href="README.zh.md"><b>🇨🇳 中文说明</b></a>
-</p>
+The manifest currently targets Node.js 20 or newer and DSH `>=0.2.3-alpha.2 <0.3.0`; this is a declared range, **not** proof that installation or compatibility has passed. An isolated install/enable/unload test, offline checks, package-content verification and independent safety review are needed before release. Do not install this unfinished revision into a profile you depend on.
 
-<table align="center">
-  <tr>
-    <td align="center">
-      ⭐ <strong>If you like this plugin, please star it on GitHub</strong> — it shows me that the plugin is useful to you and motivates me to keep developing it.
-      <br><br>
-      🐛 <strong>If you find a bug or would like to request a feature</strong>, open a GitHub issue in any language — I will review your proposal and implement useful suggestions in a future plugin version.
-    </td>
-  </tr>
-</table>
+## Intended workflow — not yet available
 
-</div>
+1. Configure an upstream route in DSH. The initial intended protocol is OpenAI Chat Completions compatible; not all compatible endpoints expose metadata with the required semantics.
+2. Request a **read-only preview**. The goal is to show discovered new and existing IDs, source and retrieval time, candidate and existing values, conflicts, and unknowns. A configured gateway's declaration is not necessarily an official model-vendor declaration.
+3. Review and select changes. Existing explicit and inherited settings take precedence; only a demonstrable DSH system capacity fallback may be replaced with verified data. New IDs may be appended only to an explicit model list after selection. New IDs from an implicitly inherited catalog remain preview-only unless safe preservation is proven.
+4. Confirm the exact fresh diff before applying it. **Any settings write requires an explicit user action or confirmation; model changes require a fresh preview and confirmation of that exact diff.** No background run, history action or update may bypass this requirement. If the diff changes, preview again.
 
----
+When a verified maximum output value is applied as DSH `maxTokens`, it also changes DSH's **default request output limit**. Check this effect before confirming.
 
-## ⚡ Overview
+## Source, privacy and safety limits
 
-**`dsh-model-sync`** keeps your **DeepSeek Harness** model catalog up-to-date with upstream AI providers. 
+- Intended optional nonofficial reference: the fixed anonymous `https://models.dev/api.json` snapshot, enabled by default in the design with a future disable control. Lookup may disclose the provider, model and protocol identifiers used for matching. **Upstream credentials and private upstream URLs must never be sent to the reference source.** The reference integration and control are not yet available.
+- A reference candidate must match one case-sensitive exact provider ID, model ID and request protocol, with a source URL and UTC retrieval time. Ambiguous, missing, conflicting, stale or unrepresentable evidence stays **unknown** and cannot authorize a write. Future retrieval timestamps remain unknown and cannot authorize a write. A local retrieval timestamp must be no more than **24 hours** old; this measures local fetch age, **not** when the source data was last updated or its accuracy.
+- Context means a total input-plus-output window; an input-only limit is not silently treated as total context. Reasoning levels require a complete, protocol-applicable level-to-wire mapping; model names and generic reasoning flags do not prove one. When an existing effective value, identity, source or safe write cannot be proven, preserve it as unknown and refuse the affected write.
+- The original plugin and this fork may read or write the same DSH provider. A revision check on this fork alone cannot prevent a later stale write by the original plugin. The intended apply must refuse while the original may write the same provider and ask the user to pause it; it must not disable the original automatically. This protection is not yet an operational apply path.
 
-Instead of manually editing YAML configs whenever a provider launches a new model, adjusts context window limits, or changes pricing, `dsh-model-sync` automatically discovers new releases, updates capability metadata (`vision`, `tools`, `reasoning`, `embeddings`), tracks account balances, manages model selection visibility, and reconciles models on the fly without server restarts.
+Pricing synchronization, Ollama management, active capability probing, webhooks and automatic plugin updates are outside this core fork. Legacy rollback is disabled: truncated or field-reduced history snapshots cannot safely restore a complete model list. Do not rely on these inherited features or old documentation.
 
-```mermaid
-graph LR
-    subgraph Trigger [Scheduling & Manual Trigger]
-        Cron[⏰ Background Polling Scheduler] --> Engine[dsh-model-sync Core Engine]
-        WebUI[🖥️ Settings: Sync Now Button] --> Engine
-    end
+## License and attribution
 
-    subgraph Providers [25+ Upstream Providers]
-        Engine --> Registry{Adapter Registry}
-        Registry -->|Bearer Auth| P1[OpenAI / DeepSeek / OpenRouter / Groq]
-        Registry -->|x-api-key Auth| P2[Anthropic Claude / Custom Gateways]
-        Registry -->|query-key Auth| P3[Google Gemini]
-        Registry -->|Local Probe| P4[Local Ollama / vLLM / SGLang]
-        Registry -->|CommandCode API| P5[Command Code / visibleModels]
-        Registry -->|Plan Discovery| P6[ClineBot Subscription Plan]
-    end
-
-    subgraph Reconcile [Catalog Reconciler & Auditing]
-        P1 --> Normalizer[Model Normalizer & Capabilities Tagger]
-        P2 --> Normalizer
-        P3 --> Normalizer
-        P4 --> Normalizer
-        P5 --> Normalizer
-        P6 --> Normalizer
-        Normalizer --> Diff[Sync Diff Tracker: Added / Deprecated]
-        Diff --> Catalog[Active DSH Models Catalog & visibleModels]
-    end
-
-    style Trigger fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4
-    style Providers fill:#181825,stroke:#cba6f7,stroke-width:2px,color:#cdd6f4
-    style Reconcile fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
-```
-
----
-
-## ✨ Key Features
-
-* 🏷️ **Smart Collections & Catalog Auto-Tagging**: Automatically categorizes models into standardized tags (`coding`, `reasoning`, `fast`, `vision`, `long-context`) during discovery, provides fast pill-button filtering in the Web UI, and introduces a one-click "⭐ Curated Best" selection preset for top flagship models.
-* ⚡ **Latency Radar & Sparklines**: Probes response latency across models, renders ASCII sparklines (` ▂▃▂ `) and 4-tier speed badges (⚡ `< 300ms`, 🟢 `< 1.2s`, 🟡 `1.5 - 3.0s`, 🔴 `> 3.0s`), and exposes `GET /dsh-model-sync/health/latency` for intelligent downstream routing. TTFT is reported only when a probe actually measures it.
-* 💸 **Dynamic Live Pricing Sync & Prompt Caching**: Periodic background updates of live model pricing from the OpenRouter catalog with a persistent disk fallback cache, tracking prompt cache read/write costs (`cacheReadPerToken`, `cacheWritePerToken`), with `GET /dsh-model-sync/pricing` and `POST /dsh-model-sync/pricing/sync` endpoints.
-* 💰 **Built-in Reference Pricing Database**: Canonical token pricing database automatically enriches models for OpenAI, Anthropic, Groq, Mistral, xAI, and DeepSeek, enabling cost-limit filtering and `@cheap` auto-resolution even when upstream APIs omit pricing metadata.
-* 🎯 **Dynamic Smart Virtual Aliases & Auto-Fallback**: Route requests to virtual aliases like `@fast`, `@cheap`, and `@best-code`, with automatic fallback chains when circuit breakers open or health probes fail.
-* 📏 **Real Context Limits & Boundary Safety (`contextWindow` / `maxOutputTokens`)**: precise separation of input and generation limits, prevention of 400 `max_tokens` errors via auto-clamping, and clear `In: 128k | Out: 8k` badges in Web UI.
-* 🧠 **Unified Reasoning & Thinking Configuration**: automatic format detection (`effort`, `budget_tokens`, `boolean`) and parameter translation with suppression of incompatible options (such as `temperature` on o1/o3).
-* 🔔 **External Diff Webhooks & Event Dispatching**: Real-time webhook notifications with HMAC-SHA256 signature verification and Cordis `model-sync/diff` events when models are added, deprecated, or prices change.
-* ⚡ **High-Performance Policy Filtering**: Fast-path evaluation in `filterModels` bypasses regular expressions and array filtering when no filtering policy is configured, guaranteeing zero-overhead discovery runs.
-* 🔄 **One-Click In-App Updates**: Built-in update checker in Settings with automatic npm cache bypass on demand (`?fresh=1` / `Cache-Control: no-cache`), ensuring instantaneous discovery of new package releases.
-* 🔄 **Automated Catalog Discovery**: Syncs model lists, aliases, context windows, and capability flags (`vision`, `tools`, `reasoning`, `embeddings`) across 25+ providers.
-* 🛡️ **Minijinja Chat Template & Role Compatibility**: Automatically sets `compat.supportsDeveloperRole: false` for Groq open-source models (Qwen, Llama, Mistral, Gemma, DeepSeek) and DeepSeek API, preventing 400 `Unexpected message role` errors with reasoning models while preserving user overrides.
-* 🌐 **25+ Built-in Provider Adapters**: Pre-configured discovery for OpenAI, Anthropic, Google, DeepSeek, xAI, OpenRouter, Groq, Mistral, Cerebras, Fireworks, HuggingFace, Moonshot, NVIDIA, Qwen, Together, Xiaomi MiMo, SiliconFlow, Command Code, ClineBot, and local Ollama.
-* 🎛️ **Command Code Model Selection**: Full discovery of Command Code models with granular checkbox selection in the UI, automatically syncing `visibleModels` to `llm-commandcode` settings.
-* 🎯 **ClineBot Subscription Plan Sync**: Dedicated adapter querying `GET /users/me/plan` to discover only active subscription-included models, eliminating catalog clutter from out-of-plan endpoints.
-* 🔌 **Generic / Custom Adapter Support**: Connect arbitrary OpenAI-compatible `/v1/models` endpoints with configurable auth (`bearer`, `x-api-key`, `query-key`, `none`).
-* 📜 **Sync History & Diff Auditing**: Tracks all newly discovered models, deprecated IDs, and modified capabilities with timestamped diff logs in the Web UI.
-* 🖥️ **Full Web GUI Panel (**Settings → Model Synchronization**)**:
-  * Live status cards per provider with active model counters;
-  * Instant "Sync Now" button for on-demand catalog refreshes;
-  * Granular model checkboxes for selection and visibility management;
-  * Provider enable/disable toggles and custom endpoint inputs.
-
----
-
-## 🛠️ Supported Discovery Providers
-
-| Provider Identifier | Authentication Format | Capabilities Auto-Detection & Notes |
-|---|---|---|
-| `openai` | Bearer Token | `vision`, `tools`, `reasoning`, `embeddings` |
-| `anthropic` | `x-api-key` header | `vision`, `tools`, `reasoning` |
-| `google` | Query parameter / Key | `vision`, `tools`, `reasoning`, `embeddings` |
-| `deepseek` | Bearer Token | `tools`, `reasoning` |
-| `xai` | Bearer Token | `vision`, `tools`, `reasoning` |
-| `openrouter` | Bearer Token | Multi-vendor model catalog with pricing & context limits |
-| `groq` | Bearer Token | `tools`, `reasoning`, `vision`, `supportsDeveloperRole: false` |
-| `mistral` | Bearer Token | `tools`, `reasoning`, `vision` |
-| `commandcode` | Bearer Token | `https://api.commandcode.ai/provider/v1/models` catalog with `visibleModels` selection syncing to `llm-commandcode` |
-| `clinebot` | Bearer Token | Active subscription plan discovery (`/users/me/plan`), restricting sync strictly to plan-included models |
-| `fireworks` | Bearer Token | Open-weights inference endpoints |
-| `huggingface` | Bearer Token | Serverless Inference API catalog |
-| `together` | Bearer Token | Open-source model catalog |
-| `ollama` | Local HTTP (`none`) | Local offline model discovery (`/api/tags`) |
-| `custom` | Configurable | Any custom OpenAI or Google compatible gateway |
-
----
-
-## Requirements
-
-- DeepSeek Harness `0.2.0-rc.2 || >=0.2.1-rc.2 <0.3.0-0` (verified on `0.2.2-rc.5`)
-- Node.js 20 or newer
-
-## 📦 Quick Installation
-
-```bash
-dsh plugin --profile web add @goodandready/dsh-model-sync
-```
-
-> [!IMPORTANT]
-> Restart DSH Web UI after installation (`systemctl --user restart dsh-web`) to activate background catalog synchronization.
-
----
-
-## ⚙️ Configuration (`settings.yaml`)
-
-```yaml
-dsh-model-sync:
-  enabled: true
-  scheduleEnabled: false
-  intervalMinutes: 60
-  autoApply: false
-  requestTimeoutMs: 15000
-  retryAttempts: 3
-  concurrency: 4
-  providers:
-    - provider: commandcode
-      enabled: true
-      autoApply: false
-    - provider: clinebot
-      enabled: true
-      autoApply: false
-```
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | `boolean` | `true` | Master switch for background synchronization |
-| `scheduleEnabled` | `boolean` | `false` | Enable periodic background synchronization schedule |
-| `intervalMinutes` | `number` | `60` | Polling frequency for catalog refreshes in minutes |
-| `autoApply` | `boolean` | `false` | Automatically apply discovered models to active catalog |
-| `requestTimeoutMs`| `number` | `15000` | HTTP request timeout for catalog fetching (ms) |
-| `retryAttempts` | `number` | `3` | Maximum retry attempts for transient network failures |
-| `concurrency` | `number` | `4` | Maximum parallel provider synchronization workers |
-| `providers` | `array` | `[]` | Per-provider configuration list (`provider`, `enabled`, `autoApply`) |
-
----
-
-### 🔍 Active Capability Probing & Verification
-- **Micro-Probes**: Accurately test actual model capabilities rather than relying on declared flags:
-  - `JSON Schema`: Tests structured output generation (`response_format: { type: "json_schema" }`).
-  - `Tools / Functions`: Tests function call generation and parameter handling.
-  - `Vision`: Tests multimodal processing with lightweight image payloads.
-  - `Developer Role`: Validates `developer` role prompt acceptance for advanced reasoning models.
-- **UI Actions**: One-click "🔍 Verify Capabilities" on any provider card, plus global "🔍 Verify All Models" and "⚡ Verify New Only" buttons in catalog toolbar.
-- **Verified Badges**: Highlights confirmed features with green indicators (`✔ Tools`, `✔ Vision`, `✔ JSON`, `✔ DevRole`) persisted across restarts.
-
-### 🦙 Ollama & Local Engine Hub
-- **Direct Web Management**: Pull, monitor, and manage local Ollama models directly from DSH Web UI without SSH.
-- **Streaming Pull Progress**: Real-time layer download progress bar with speed and transferred byte metrics.
-- **GPU VRAM Management**: Displays active models in VRAM (`/api/ps`) and provides instant "⏏ Unload from VRAM" (`keep_alive: 0`) to free GPU resources.
-- **Architecture & Quantization**: Displays quantization levels (`Q4_K_M`, `Q8_0`), family, context windows, and offers direct deletion.
-
-
----
-
-## 📄 License
-
-MIT © [GooDAnDReaDY](https://github.com/GooDAnDReaDY)
+This fork retains the upstream [MIT license](LICENSE), including **Copyright © 2026 GooDAnDReaDY**. The license and attribution must accompany redistribution.

@@ -1,197 +1,33 @@
-# 📦 @goodandready/dsh-model-sync
+# dsh-model-metadata-sync
 
-<div align="center">
+[English](README.md) · [中文](README.zh.md) · [Русский](README.ru.md)
 
-<h3>面向 DeepSeek Harness 的动态大模型目录同步插件</h3>
+这是 [GooDAnDReaDY/dsh-model-sync](https://github.com/GooDAnDReaDY/dsh-model-sync) 的开发中分支，目标是帮助用户审核已配置的 DeepSeek Harness（DSH）服务商模型元数据；它不是原插件的改名发布版。
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/@goodandready/dsh-model-sync"><img src="https://img.shields.io/npm/v/@goodandready/dsh-model-sync.svg?style=for-the-badge&color=6366f1&labelColor=1e1b4b" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge&color=10b981&labelColor=064e3b" alt="license"></a>
-  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-Plugin-8b5cf6.svg?style=for-the-badge&labelColor=2e1065" alt="DSH Plugin"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-20%2B-f59e0b.svg?style=for-the-badge&labelColor=451a03" alt="Node version"></a>
-</p>
+## 状态：尚不可用
 
-<p align="center">
-  <a href="https://goodandready.app/"><img src="https://img.shields.io/badge/作者所有项目-goodandready.app-ff4500.svg?style=for-the-badge&logo=rocket&logoColor=white&labelColor=1a1a2e" alt="作者所有项目"></a>
-</p>
+核心发现、参考库查询、面向用户的预览和安全应用流程**尚未接通**。当前 Host 只预留相应路由：通过授权后返回 `AUTHORITY_UNAVAILABLE`，不会执行这些操作。旧版同步（包括 dry-run）及后台发现均已禁用。旧界面可能仍有控件，不应据此判断操作可用。本说明不声称此开发版本已安装验证、公开发布、进入目录或具备端到端安全性。
 
-<p align="center">
-  <a href="README.md"><b>🇬🇧 English</b></a> •
-  <a href="README.ru.md"><b>🇷🇺 Русский</b></a> •
-  <a href="README.zh.md"><b>🇨🇳 中文说明</b></a>
-</p>
+清单声明 Node.js 20 或以上，以及 DSH `>=0.2.3-alpha.2 <0.3.0`；这只是声明范围，**不等于**安装或兼容性已通过验证。发布前还需要离线检查、打包内容核对、独立安全审查和隔离环境中的安装／启用／卸载测试。请勿将此未完成版本安装到依赖使用的配置环境。
 
-<table align="center">
-  <tr>
-    <td align="center">
-      ⭐ <strong>如果您喜欢这个插件，请在 GitHub 上为它点亮 Star</strong> — 这能让我知道插件对您有用，并鼓励我继续开发和维护它。
-      <br><br>
-      🐛 <strong>如果您发现 Bug 或希望增加功能</strong>，请使用任意语言在 GitHub 上提交 Issue — 我会评估您的建议，并在后续版本中实现有价值的改进。
-    </td>
-  </tr>
-</table>
+## 预期操作流程——尚未可用
 
-</div>
+1. 在 DSH 中配置服务商路由。首期目标协议是兼容 OpenAI Chat Completions；并非所有兼容端点都提供语义明确的元数据。
+2. 请求**只读预览**。目标是展示新旧模型 ID、来源和检索时间、已有值与候选值、冲突和未知项。配置网关的声明不一定是模型厂商的官方声明。
+3. 审核并选择变更。现有显式及继承配置优先；只有可证明的 DSH 系统容量回退猜测，才可由经过验证的数据替换。只有显式模型列表允许在用户选择后追加新 ID；隐式继承目录中的新 ID 在证明能够安全保留之前只能预览。
+4. 对**当前这份精确差异**确认后再应用。**任何设置写入都须由用户明确操作或确认；模型配置变更须先取得新的预览并确认精确差异。**后台任务、历史操作和更新均不得绕过确认；差异变化时须重新预览。
 
----
+将经过验证的最大输出值写为 DSH `maxTokens` 时，也会改变 DSH 的**默认请求输出上限**；确认前请检查这一影响。
 
-## ⚡ 插件概览
+## 来源、隐私与安全边界
 
-**`dsh-model-sync`** 保持您的 **DeepSeek Harness** 模型目录与上游各大 AI 服务商最新发布完全同步。
+- 设计中的可选非官方参考源为固定的匿名 `https://models.dev/api.json` 快照，计划默认启用并提供关闭开关。匹配时可能使用或披露服务商、模型和协议标识。**上游凭证和私有上游地址绝不能发送给参考源。**参考库接入和开关目前尚未可用。
+- 参考候选必须与服务商 ID、模型 ID 和请求协议大小写精确匹配且唯一，并展示来源 URL 和 UTC 检索时间。证据缺失、歧义、冲突、过期或无法表达时保持 **unknown（未知）**，不能据此写入。未来的检索时间也属于未知，不能据此写入。本地检索时间不得超过 **24 小时**；它只表示本地获取经过的时间，**不是**来源数据更新时间或准确性的证明。
+- 上下文窗口指输入加输出的总容量，不能把仅输入限制直接当作总容量。推理级别必须有完整、适用于该协议的级别到实际传输值映射；模型名称或一般推理标志不能证明这些级别。已有有效值、身份、来源或写入安全性无法证明时，保持未知并拒绝相关写入。
+- 原插件与本分支可能同时读写同一 DSH 服务商；仅本分支使用版本检查无法阻止原插件随后写入过期数据。预期的应用流程必须在原插件可能写同一服务商时拒绝应用，提示用户暂停原插件，但不会自动禁用它。该保护目前尚未形成可用的应用流程。
 
-每当服务商推出新模型、调整上下文窗口上限或变更费率时，不再需要手动逐项编辑 YAML 配置文件。`dsh-model-sync` 能够自动发现新版本、更新模型能力元数据（`vision`、`tools`、`reasoning`、`embeddings`）并在无需重启服务的情况下即时对齐模型目录。
+价格同步、Ollama 管理、主动能力探测、Webhook 和插件自动更新不属于本核心分支。旧版回滚已禁用：截断或丢失字段的历史快照不能安全恢复完整模型列表。请勿依赖这些旧功能或上游旧版说明。
 
-```mermaid
-graph LR
-    subgraph Trigger [调度与手动触发]
-        Cron[⏰ 后台轮询调度器] --> Engine[dsh-model-sync 核心引擎]
-        WebUI[🖥️ 设置面板: 立即同步按钮] --> Engine
-    end
+## 协议与归属
 
-    subgraph Providers [25+ 上游服务商]
-        Engine --> Registry{适配器注册中心}
-        Registry -->|Bearer 认证| P1[OpenAI / DeepSeek / OpenRouter / Groq]
-        Registry -->|x-api-key 认证| P2[Anthropic Claude / 自定义网关]
-        Registry -->|query-key 认证| P3[Google Gemini]
-        Registry -->|本地探测| P4[本地 Ollama / vLLM / SGLang]
-        Registry -->|CommandCode 接口| P5[Command Code / visibleModels]
-        Registry -->|套餐检测| P6[ClineBot 订阅套餐]
-    end
-
-    subgraph Reconcile [目录对齐与审计追踪]
-        P1 --> Normalizer[模型标准化器与能力打标]
-        P2 --> Normalizer
-        P3 --> Normalizer
-        P4 --> Normalizer
-        P5 --> Normalizer
-        P6 --> Normalizer
-        Normalizer --> Diff[差异跟踪: 新增 / 已废弃]
-        Diff --> Catalog[当前可用 DSH 模型目录与 visibleModels]
-    end
-
-    style Trigger fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4
-    style Providers fill:#181825,stroke:#cba6f7,stroke-width:2px,color:#cdd6f4
-    style Reconcile fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
-```
-
----
-
-## ✨ 核心特性
-
-* 🏷️ **智能集合与模型自动标签**：同步时自动识别并标记模型分类标签（`coding` 编程、`reasoning` 思考推理、`fast` 极速轻量、`vision` 多模态、`long-context` 128k+ 长上下文），支持 UI 药丸胶囊快速筛选与一键精选顶级旗舰预设（"⭐ 精选最佳"）。
-* ⚡ **延迟雷达与火花线可视化**：实时测量模型响应时间，提供火花线走势（` ▂▃▂ `）及 4 档速度徽章（⚡ `< 300ms`、🟢 `< 1.2s`、🟡 `1.5 - 3.0s`、🔴 `> 3.0s`），并开放 `GET /dsh-model-sync/health/latency` 路由接口。仅在探测实际测到首字延迟 (TTFT) 时才返回该字段。
-* 💸 **实时价格动态后台同步与提示词缓存**：定期从 OpenRouter 获取最新模型单价，支持本地磁盘降级缓存，支持提示词缓存读写定价（`cacheReadPerToken`、`cacheWritePerToken`），并提供 `GET /dsh-model-sync/pricing` 和 `POST /dsh-model-sync/pricing/sync` 端点。
-* 💰 **内置基准价格数据库**：自动为 OpenAI、Anthropic、Groq、Mistral、xAI 和 DeepSeek 模型补充 Token 价格数据，即使服务商接口未返回价格，也可无缝支持成本上限过滤与 `@cheap` 别名解析。
-* 🎯 **动态智能虚拟别名与故障转移**：支持 `@fast`、`@cheap`、`@best-code` 等虚拟别名及故障转移链，在熔断器打开或健康检查失败时自动切换至备用模型。
-* 📏 **真实上下文限制与边界安全 (`contextWindow` / `maxOutputTokens`)**：精确区分输入与输出令牌限制，通过自动限制防止 400 `max_tokens` 错误，并在 Web UI 中显示 `输入: 128k | 输出: 8k` 徽章。
-* 🧠 **统一的深度思考与推理配置 (Reasoning & Thinking)**：自动检测参数格式 (`effort`, `budget_tokens`, `boolean`) 并转换推理预算，自动屏蔽不兼容参数（如 o1/o3 的 `temperature`）。
-* 🔔 **外部差异通知 Webhook 与事件分发**：支持 HMAC-SHA256 签名验证的实时 Webhook 通知与 Cordis `model-sync/diff` 事件，可在新模型上线、模型废弃或价格变更时即时推送。
-* ⚡ **高性能模型策略过滤**：在未配置过滤策略时，`filterModels` 采用快速路径直接返回模型目录，避免不必要的正则表达式编译和数组遍历。
-* 🔄 **一键检查与更新**：内置设置面板更新检查，在手动刷新时通过 `?fresh=1` 或 `Cache-Control: no-cache` 绕过 npm 缓存，即时获取最新版本。
-* 🔄 **自动化目录同步**：自动对齐 25+ 服务商的模型清单、别名、上下文窗口及能力标签（`vision`、`tools`、`reasoning`、`embeddings`）。
-* 🛡️ **Minijinja 聊天模板与角色兼容性保障**：自动为 Groq 开源模型（Qwen、Llama、Mistral、Gemma、DeepSeek）及 DeepSeek API 注入 `compat.supportsDeveloperRole: false`，避免推理模型报 400 `Unexpected message role` 错误，同时保留用户自定义配置。
-* 🌐 **内置 25+ 服务商适配器**：预置支持 OpenAI、Anthropic、Google、DeepSeek、xAI、OpenRouter、Groq、Mistral、Cerebras、Fireworks、HuggingFace、Moonshot、NVIDIA、Qwen、Together、Xiaomi MiMo、SiliconFlow、Command Code、ClineBot 以及本地 Ollama。
-* 🎛️ **Command Code 模型精细管理**：完整发现 Command Code 模型目录，在 Web 界面提供勾选过滤，自动同步 `visibleModels` 至 `llm-commandcode` 设置中。
-* 🎯 **ClineBot 订阅套餐精准匹配**：专属适配器直接调用 `GET /users/me/plan`，只拉取当前有效订阅套餐包含的模型，彻底解决全量拉取 400+ 外部模型导致的混淆。
-* 🔌 **通用与自定义适配器扩展**：支持接入任意兼容 OpenAI `/v1/models` 规范的网关，支持多种认证方式（`bearer`、`x-api-key`、`query-key`、`none`）。
-* 📜 **同步历史与变更审计**：完整记录新模型上线、旧模型废弃及能力变更的时间线与详细差异。
-* 🖥️ **全功能 Web 管理面板 (**设置 → 模型同步**)**：
-  * 每个服务商的卡片化状态展示与模型计数；
-  * 一键即时同步（Sync Now）；
-  * 模型勾选过滤与显示控制；
-  * 服务商启用开关及自定义 Endpoint 地址输入。
-
----
-
-## 🛠️ 支持的服务商列表
-
-| 服务商标识符 | 认证机制 | 能力自检与特性说明 |
-|---|---|---|
-| `openai` | Bearer Token | `vision`, `tools`, `reasoning`, `embeddings` |
-| `anthropic` | `x-api-key` 请求头 | `vision`, `tools`, `reasoning` |
-| `google` | Query 参数 / 密钥 | `vision`, `tools`, `reasoning`, `embeddings` |
-| `deepseek` | Bearer Token | `tools`, `reasoning` |
-| `xai` | Bearer Token | `vision`, `tools`, `reasoning` |
-| `openrouter` | Bearer Token | 多厂商汇聚模型目录，包含计费与上下文规格 |
-| `groq` | Bearer Token | `tools`, `reasoning`, `vision`, `supportsDeveloperRole: false` |
-| `mistral` | Bearer Token | `tools`, `reasoning`, `vision` |
-| `commandcode` | Bearer Token | 对接 `https://api.commandcode.ai/provider/v1/models`，同步勾选至 `llm-commandcode` 的 `visibleModels` |
-| `clinebot` | Bearer Token | 仅同步有效订阅套餐 (`/users/me/plan`) 包含的模型 |
-| `fireworks` | Bearer Token | 开源权重推理节点 |
-| `huggingface` | Bearer Token | Serverless Inference API 目录 |
-| `together` | Bearer Token | 开源大模型服务网络 |
-| `ollama` | 本地 HTTP (`none`) | 本地离线模型实时发现 (`/api/tags`) |
-| `custom` | 自定义配置 | 任意兼容 OpenAI 或 Google 规范的 API 网关 |
-
----
-
-## 📋 环境要求
-
-- DeepSeek Harness `0.2.0-rc.2 || >=0.2.1-rc.2 <0.3.0-0`（已在 `0.2.2-rc.5` 验证）
-- Node.js 20 或更高版本
-
-## 📦 快速安装
-
-```bash
-dsh plugin --profile web add @goodandready/dsh-model-sync
-```
-
-> [!IMPORTANT]
-> 安装后请重启 DSH Web 界面 (`systemctl --user restart dsh-web`)，以激活后台目录自动同步。
-
----
-
-## ⚙️ 配置说明 (`settings.yaml`)
-
-```yaml
-dsh-model-sync:
-  enabled: true
-  scheduleEnabled: false
-  intervalMinutes: 60
-  autoApply: false
-  requestTimeoutMs: 15000
-  retryAttempts: 3
-  concurrency: 4
-  providers:
-    - provider: commandcode
-      enabled: true
-      autoApply: false
-    - provider: clinebot
-      enabled: true
-      autoApply: false
-```
-
-| 参数名称 | 类型 | 默认值 | 功能说明 |
-|---|---|---|---|
-| `enabled` | `boolean` | `true` | 后台自动同步主开关 |
-| `scheduleEnabled` | `boolean` | `false` | 启用周期性后台定时同步任务 |
-| `intervalMinutes` | `number` | `60` | 目录更新轮询间隔（分钟） |
-| `autoApply` | `boolean` | `false` | 是否自动将新发现的模型生效至可用列表 |
-| `requestTimeoutMs`| `number` | `15000` | 目录拉取 HTTP 请求超时时间（毫秒） |
-| `retryAttempts` | `number` | `3` | 瞬态网络故障的最大重试次数 |
-| `concurrency` | `number` | `4` | 最大并发服务商同步任务数 |
-| `providers` | `array` | `[]` | 服务商独立配置列表（`provider`、`enabled`、`autoApply`） |
-
----
-
-### 🔍 主动硬件能力探测 (Capability Probing)
-- **微探针测试**：真实验证模型能力，杜绝虚标：
-  - `JSON Schema`：测试结构化 JSON 生成。
-  - `Tools / Functions`：测试函数与工具调用能力。
-  - `Vision`：测试多模态图像理解。
-  - `Developer Role`：测试推理模型的 `developer` 角色支持。
-- **Web UI 操作**：服务商卡片专属“🔍 验证能力”按钮，全局工具栏支持“🔍 验证所有模型”与“⚡ 仅验证新模型”。
-- **能力认证徽章**：绿色认证标识（`✔ Tools`, `✔ Vision`, `✔ JSON`, `✔ DevRole`）持久化存储。
-
-### 🦙 Ollama 本地模型管理中心
-- **Web 端直接管理**：无需登录终端即可在 DSH 界面直接拉取、查看与删除 Ollama 本地模型。
-- **实时下载进度条**：流式展示层下载百分比与传输大小。
-- **显存调度 (VRAM)**：监控显存中活跃模型（`/api/ps`），支持一键“⏏ 释放显存” (`keep_alive: 0`)。
-- **量化与架构信息**：清晰展示量化格式（`Q4_K_M`, `Q8_0`）、模型系列及真实上下文窗口。
-
-
----
-
-## 📄 开源协议
-
-MIT © [GooDAnDReaDY](https://github.com/GooDAnDReaDY)
+本分支保留上游 [MIT 协议](LICENSE)，包括 **Copyright © 2026 GooDAnDReaDY**。再分发时必须一并保留协议与归属声明。
