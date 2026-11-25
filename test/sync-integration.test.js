@@ -247,7 +247,7 @@ if (process.env.SYNC_HOST_SEAL_CHILD !== '1') {
     '/ollama/unload', '/ollama/delete',
   ]
   const CONTRACT_HTTP_PATHS = ['/preview', '/apply', '/preview/cancel', '/status', '/reference-settings']
-  const UNWIRED_HTTP_PATHS = ['/preview', '/apply', '/preview/cancel']
+  const UNWIRED_HTTP_PATHS = ['/apply', '/preview/cancel']
   const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
   const FORK_BASE = '/dsh-model-metadata-sync'
   const OLD_BASE = '/dsh-model-sync'
@@ -296,7 +296,7 @@ if (process.env.SYNC_HOST_SEAL_CHILD !== '1') {
     assert.ok(registrations.every(route => route.auth === 'required'), 'fork paths must request the Host authentication boundary')
   })
 
-  test('unwired preview and apply paths remain explicitly unavailable', async () => {
+  test('unwired apply and cancellation paths remain explicitly unavailable', async () => {
     const fixture = registeredHttp()
     for (const suffix of UNWIRED_HTTP_PATHS) {
       const route = fixture.registrations.find(item => item.path === `${FORK_BASE}${suffix}`)

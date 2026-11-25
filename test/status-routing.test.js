@@ -199,9 +199,12 @@ if (process.env.METADATA_STATUS_CHILD !== '1') {
     f.host.dispose()
   })
 
-  test('preview and apply remain unavailable and effect-free', async () => {
+  test('invalid preview and unavailable apply paths remain effect-free', async () => {
     const f = fakeHost()
-    for (const suffix of ['/preview', '/apply', '/preview/cancel']) {
+    const invalid = await invoke(f.routes.get(`${BASE}/preview`), { method: 'POST', raw: '{}' })
+    assert.equal(invalid.status, 422)
+    assert.equal(invalid.body.error.code, 'INVALID_RESPONSE')
+    for (const suffix of ['/apply', '/preview/cancel']) {
       const response = await invoke(f.routes.get(`${BASE}${suffix}`), { method: 'POST', raw: '{}' })
       assert.equal(response.status, 503)
       assert.equal(response.body.error.code, 'AUTHORITY_UNAVAILABLE')

@@ -70,7 +70,7 @@ test('read-only discovery uses the exact configured source and credential, retai
   const catalogResult = await runtime.discover('sample')
   assert.equal(catalogResult.status, 'complete')
   assert.equal(catalogResult.revision, 8)
-  assert.equal(catalogResult.inventory, 'explicit')
+  assert.equal(catalogResult.inventory, 'unknown', 'missing user layer cannot prove an explicit list')
   assert.deepEqual(catalogResult.effective, { status: 'unknown', inventoryComplete: false })
   assert.deepEqual(catalogResult.catalog.models.map(m => [m.id, m.existing]), [['old', true], ['new', false]])
   assert.equal(catalogMatchesTarget(catalogResult.catalog, target), true)

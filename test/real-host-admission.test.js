@@ -203,7 +203,7 @@ if (process.env[CHILD] !== '1') {
       await check('untrusted Host rejected by source fence before provider', { authorization: 'Synthetic owner', host: 'attacker.invalid:31843' }, { status: 403, body: 'forbidden' }, true)
       await check('synthetic provider failure -> real Connection 503', { authorization: 'Synthetic throw' }, { status: 503, body: 'authentication unavailable' })
       await check('real non-owner Peer reaches plugin and is refused', { authorization: 'Synthetic non-owner' }, { status: 403, code: 'AUTH_REQUIRED' })
-      await check('real owner Peer reaches plugin unavailable-authority response', { authorization: 'Synthetic owner' }, { status: 503, code: 'AUTHORITY_UNAVAILABLE' })
+      await check('real owner Peer reaches plugin and missing Host wiring fails closed', { authorization: 'Synthetic owner' }, { status: 503, code: 'SETTINGS_UNAVAILABLE' })
       assert.equal(verified, 9)
       assert.equal(forbiddenNetworkAttempts, 0, 'the fixture or runtime attempted a network operation')
       console.log(`REAL_CARRIER_VERIFIED=${verified}`)
