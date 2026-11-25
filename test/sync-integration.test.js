@@ -255,6 +255,7 @@ if (process.env.SYNC_HOST_SEAL_CHILD !== '1') {
     const fixture = fakeHost()
     const registrations = []
     fixture.ctx.webServer = { register(route) { registrations.push(route); return () => {} } }
+    fixture.ctx.webApp = { getAdvertisedUrl: () => 'http://127.0.0.1:3000' }
     registerHttpApi(fixture.ctx, fixture.runner)
     return { ...fixture, registrations }
   }
@@ -271,7 +272,9 @@ if (process.env.SYNC_HOST_SEAL_CHILD !== '1') {
       writeHead(status, headers) { response.status = status; response.headers = headers; return this },
       end(data = '') { response.data += data; return this },
     }
-    await route.handler(req, res)
+    // This fixture exercises the post-admission handler only. Real Host-carrier
+    // admission remains unverified and is not proved by this synthetic peer.
+    await route.handler(req, res, { principal: { kind: 'owner' }, signal: { aborted: false } })
     assert.ok(Number.isInteger(response.status), `${method} ${route.path} did not finish`)
     try { response.body = JSON.parse(response.data) } catch { response.body = null }
     return response
