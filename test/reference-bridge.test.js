@@ -79,6 +79,35 @@ test('synthetic public normalizer → bounded worker → Host bridge → reconci
   assert.doesNotMatch(JSON.stringify(result), /synthetic-gateway\.example|synthetic-gateway-docs\.example/);
 });
 
+test('an already-aborted Host signal prevents a synthetic reference capability', async () => {
+  const catalog = normalize();
+  const bridge = await makeBridge();
+  const owner = new AbortController();
+  owner.abort();
+  assert.equal(await bridge.fetch({ catalog, provider, endpoint, protocol }, owner.signal), null);
+});
+
+test('cancelling a Host-owned bridge request terminates its worker and rejects late results', async () => {
+  const catalog = normalize();
+  const owner = new AbortController();
+  let worker, workerOptions;
+  const controller = createReferenceWorkerControllerForTest({ receiptClock: () => time, createWorker(entry, options) {
+    workerOptions = options;
+    worker = new EventEmitter();
+    worker.terminate = () => { worker.terminated = true; return Promise.resolve(1); };
+    return worker;
+  } });
+  const bridge = reference.createReferenceBridgeForTest({ controller, clock: () => time, bindings: [binding], semantics: [semantics] });
+  const pending = bridge.fetch({ catalog, provider, endpoint, protocol }, owner.signal);
+  worker.emit('message', JSON.stringify((await fixture()).records));
+  owner.abort();
+  assert.equal(worker.terminated, true);
+  worker.emit('exit', 1);
+  assert.equal(await pending, null);
+  assert.equal(Object.hasOwn(workerOptions, 'workerData'), false);
+  assert.doesNotMatch(JSON.stringify(workerOptions), /synthetic-provider|synthetic-model|synthetic-gateway|openai-completions/);
+});
+
 test('the capability cannot be forged, cloned, retargeted or transferred to another catalog', async () => {
   const catalog = normalize();
   const bridge = await makeBridge();

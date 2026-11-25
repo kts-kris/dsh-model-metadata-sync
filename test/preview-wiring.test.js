@@ -2,6 +2,35 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
 import { syncBuiltinESMExports } from 'node:module'
+import { EventEmitter } from 'node:events'
+
+// Install the worker fake before loading the real HTTP/worker client. This test
+// process must never start a real worker or make an anonymous public request.
+let workerState
+class FakeReferenceWorker extends EventEmitter {
+  constructor(entry, options) {
+    super()
+    const state = workerState
+    if (!state) throw Error('missing isolated worker state')
+    state.referenceCalls.push({ entry: entry.href, options, worker: this })
+    queueMicrotask(async () => {
+      try {
+        await state.beforeReference()
+        this.emit('message', JSON.stringify(state.referenceResult.records))
+        if (!this.terminated) this.emit('exit', 0)
+      } catch {
+        if (!this.terminated) { this.emit('error', Error('synthetic worker error')); this.emit('exit', 1) }
+      }
+    })
+  }
+  terminate() {
+    this.terminated = true
+    queueMicrotask(() => this.emit('exit', 1))
+    return Promise.resolve(1)
+  }
+}
+const workerThreads = (await import('node:worker_threads')).default
+workerThreads.Worker = FakeReferenceWorker
 
 // This is a synthetic Host/post-admission integration seam, not a live DSH
 // carrier, real provider, publication check, or access to a user profile.
@@ -59,12 +88,8 @@ function fakeHost() {
     await state.beforeReply()
     return new Response(JSON.stringify({ data: state.rows }), { headers: { 'content-type': 'application/json' } })
   }
-  const fetchReferenceSnapshot = async (...args) => {
-    state.referenceCalls.push(args)
-    await state.beforeReference()
-    return state.referenceResult
-  }
-  const disposers = registerHttpApi(ctx, {}, { referenceSettings, fetchImpl, fetchReferenceSnapshot })
+  workerState = state
+  const disposers = registerHttpApi(ctx, {}, { referenceSettings, fetchImpl })
   return { state, services, routes, disposers }
 }
 
@@ -220,18 +245,89 @@ test('owner cancellation aborts transport and no late discovery becomes a previe
   assert.deepEqual(f.state.referenceCalls, [])
 })
 
-test('enabled reference remains unavailable without starting a worker or inventing data', async () => {
+test('enabled reference starts only the anonymous fixed worker but cannot invent values', async () => {
   const f = fakeHost()
   f.state.referenceEnabled = true
   const result = await call(f, '/preview')
   assert.equal(result.status, 200, result.text)
-  assert.deepEqual(f.state.referenceCalls, [])
+  assert.equal(f.state.referenceCalls.length, 1)
+  const [{ entry, options }] = f.state.referenceCalls
+  assert.equal(entry.endsWith('/lib/reference-worker-entry.js'), true)
+  assert.deepEqual(options.env, {})
+  assert.equal(Object.hasOwn(options, 'workerData'), false)
+  assert.doesNotMatch(JSON.stringify(options), /provider-a|new-a|completions|gateway|synthetic-bearer/)
   assert.equal(result.body.sources.reference.status, 'unknown')
-  assert.equal(result.body.sources.reference.reason, 'temporarily-unavailable')
   assert.equal(result.text.includes('65536'), false)
   assert.equal(result.text.includes(SECRET), false)
   assert.equal(result.text.includes(BASE), false)
   assert.deepEqual(f.state.writes, [])
+})
+
+test('peer abort terminates the active anonymous worker and forbids a late preview', async () => {
+  const f = fakeHost(); f.state.referenceEnabled = true
+  let release, entered
+  const waiting = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { entered = resolve })
+  f.state.beforeReference = () => { entered(); return waiting }
+  const owner = new AbortController()
+  const pending = call(f, '/preview', { peer: { principal: { kind: 'owner' }, signal: owner.signal } })
+  try {
+    await started
+    const worker = f.state.referenceCalls[0].worker
+    owner.abort()
+    assert.equal(worker.terminated, true)
+    const result = await pending
+    assert.equal(result.status, 401)
+    assert.equal('previewId' in result.body, false)
+    assert.deepEqual(f.state.writes, [])
+  } finally { release(); await pending; f.disposers[0]() }
+})
+
+test('disposing cancels the active worker; a parallel busy request cannot cancel its owner', async () => {
+  const f = fakeHost(); f.state.referenceEnabled = true
+  let release, entered
+  const waiting = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { entered = resolve })
+  f.state.beforeReference = () => { entered(); return waiting }
+  const first = call(f, '/preview')
+  try {
+    await started
+    const second = await call(f, '/preview')
+    assert.equal(second.status, 200)
+    assert.equal(second.body.sources.reference.status, 'unknown')
+    assert.equal(f.state.referenceCalls.length, 1)
+    const worker = f.state.referenceCalls[0].worker
+    assert.notEqual(worker.terminated, true)
+    f.disposers[0]()
+    assert.equal(worker.terminated, true)
+    const result = await first
+    assert.equal(result.status, 502)
+    assert.equal('previewId' in result.body, false)
+    assert.deepEqual(f.state.writes, [])
+  } finally { release(); await first }
+})
+
+test('disabling reference during lookup refuses publication and prevents future workers', async () => {
+  const f = fakeHost(); f.state.referenceEnabled = true
+  let release, entered
+  const waiting = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { entered = resolve })
+  f.state.beforeReference = () => { entered(); return waiting }
+  const pending = call(f, '/preview')
+  try {
+    await started
+    f.state.referenceEnabled = false
+    release()
+    const result = await pending
+    assert.equal(result.status, 409)
+    assert.equal(result.body.error.code, 'REVISION_CONFLICT')
+    assert.equal('previewId' in result.body, false)
+    const next = await call(f, '/preview')
+    assert.equal(next.status, 200)
+    assert.equal(next.body.sources.reference.status, 'disabled')
+    assert.equal(f.state.referenceCalls.length, 1)
+    assert.deepEqual(f.state.writes, [])
+  } finally { release(); await pending; f.disposers[0]() }
 })
 
 test('strict bodies reject forged fields, duplicates, encoding and invalid selections', async () => {
