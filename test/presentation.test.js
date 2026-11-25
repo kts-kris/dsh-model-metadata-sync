@@ -13,7 +13,7 @@ function shippedClient(react = { createElement() {} }) {
 
 function applicablePreview(source) {
   return {
-    provider: 'p', previewId: 'id', digest: 'digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z', selectedNewIds: [],
+    provider: 'p', previewId: 'id', digest: 'digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z', selectedNewIds: [], writeEnabled: true,
     items: [{ modelId: 'existing', existing: true, fields: [{ field: 'maxTokens', state: 'applicable', before: null, candidate: 1000, source }] }],
     changes: [{ type: 'set-field', modelId: 'existing', scope: 'models', index: 0, field: 'maxTokens', value: 1000 }], warnings: [],
   }
@@ -107,7 +107,7 @@ test('presentation keeps hostile IDs as text and shows each exact field and sour
   const { exports: client } = shippedClient()
   const hostile = '<img src=x onerror=alert(1)>'
   const preview = client.presentPreview({
-    provider: 'sample', previewId: 'p', digest: 'd', revision: 4, expiresAt: '2026-11-25T03:05:00Z', selectedNewIds: [hostile],
+    provider: 'sample', previewId: 'p', digest: 'd', revision: 4, expiresAt: '2026-11-25T03:05:00Z', selectedNewIds: [hostile], writeEnabled: true,
     items: [{ modelId: hostile, existing: false, reason: 'selected', fields: [
       { field: 'contextWindow', state: 'conflict', reason: 'explicit-value', before: 32000, candidate: 64000, source: { kind: 'reference', origin: 'https://models.dev/api.json', fetchedAt: '2026-11-25T03:00:00Z' } },
       { field: 'reasoningEfforts', state: 'applicable', before: null, candidate: { off: null, low: 'quick', high: 'deep' }, source: { kind: 'upstream', fetchedAt: '2026-11-25T03:00:00Z' } },
@@ -125,6 +125,32 @@ test('presentation keeps hostile IDs as text and shows each exact field and sour
   assert.equal(preview.items[0].fields.find(field => field.field === 'maxTokens').state, 'unknown')
   assert.equal(preview.changes[0].modelId, hostile)
   assert.equal(preview.canReview, true)
+})
+
+test('an explicitly read-only preview cannot enable confirmation', () => {
+  const { exports: client } = shippedClient()
+  const source = { kind: 'upstream', fetchedAt: '2026-11-25T03:00:00Z' }
+  const preview = { ...applicablePreview(source), authority: 'unavailable', writeEnabled: false }
+  assert.equal(client.presentPreview(preview).canReview, false)
+})
+
+test('unknown inherited catalog identities remain visible but cannot be selected', async () => {
+  const { exports: client } = shippedClient()
+  const raw = { ...applicablePreview({ kind: 'upstream', fetchedAt: '2026-11-25T03:00:00Z' }),
+    authority: 'unavailable', writeEnabled: false,
+    items: [{ modelId: 'unresolved-model', existing: null, reason: 'inventory-unknown', fields: [] }],
+    changes: [], selectedNewIds: [] }
+  const projected = client.presentPreview(raw)
+  assert.equal(projected.items[0].modelId, 'unresolved-model')
+  assert.equal(projected.items[0].existing, null)
+  assert.equal(projected.canReview, false)
+  const controller = client.createController({
+    getStatus: async () => ({ providers: [{ id: 'p', status: 'unknown', lastAttemptAt: null }], referenceEnabled: true }),
+    preview: async () => raw,
+  }, () => {}, () => Date.parse('2026-11-25T03:00:00Z'))
+  await controller.loadStatus(); controller.chooseProvider('p'); await controller.preview()
+  controller.selectNew('unresolved-model', true)
+  assert.deepEqual(Array.from(controller.snapshot().selected), [])
 })
 
 test('a changed field requires its exact source class and a canonical valid UTC retrieval time', () => {
@@ -348,7 +374,7 @@ test('shipped client never loads or writes until explicit actions and confirms t
     calls.push({ url, method: init.method, body })
     const response = url.endsWith('/status') ? { providers: [{ id: 'provider-a', status: 'success', lastAttemptAt: '2026-11-25T03:00:00Z' }], referenceEnabled: true }
       : url.endsWith('/preview') ? {
-        provider: 'provider-a', previewId: 'preview-token', digest: 'diff-digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z',
+        provider: 'provider-a', previewId: 'preview-token', digest: 'diff-digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z', writeEnabled: true,
         selectedNewIds: body.selectedNewIds, items: [{ modelId: 'm', existing: false, reason: body.selectedNewIds.length ? 'selected' : 'not-selected', fields: [] }],
         changes: body.selectedNewIds.map(modelId => ({ type: 'add-model', modelId })), warnings: [],
       } : url.endsWith('/apply') ? { status: 'applied' } : { referenceEnabled: false }
@@ -384,7 +410,7 @@ test('inherited additions cannot be selected and preference changes invalidate c
     calls.push([url, body])
     const data = url.endsWith('/status') ? { providers: [{ id: 'p', status: 'ok' }], referenceEnabled: true }
       : url.endsWith('/reference-settings') ? { referenceEnabled: body.enabled }
-      : { provider: 'p', previewId: 'id', digest: 'digest', revision: 3, expiresAt: '2030-01-01T00:00:00Z', selectedNewIds: [],
+      : { provider: 'p', previewId: 'id', digest: 'digest', revision: 3, expiresAt: '2030-01-01T00:00:00Z', selectedNewIds: [], writeEnabled: true,
         items: [{ modelId: 'inherited-new', existing: false, reason: 'inherited-add-unsupported' }], changes: [], warnings: [] }
     return { ok: true, status: 200, text: async () => JSON.stringify(data) }
   } })
@@ -560,7 +586,7 @@ test('failed status refresh clears the prior preview and confirmation', async ()
   const api = client.createModelSyncApiClient({ fetchImpl: async url => {
     if (url.endsWith('/status') && ++statusLoads > 1) return { ok: false, status: 503, text: async () => '{}' }
     const result = url.endsWith('/status') ? { providers: [{ id: 'p' }], referenceEnabled: true } : {
-      provider: 'p', previewId: 'token', digest: 'digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z', selectedNewIds: [],
+      provider: 'p', previewId: 'token', digest: 'digest', revision: 1, expiresAt: '2030-01-01T00:00:00Z', writeEnabled: true, selectedNewIds: [],
       items: [{ modelId: 'existing', existing: true, fields: [{ field: 'maxTokens', state: 'applicable', before: null, candidate: 1000, source: { kind: 'upstream', fetchedAt: '2026-11-25T03:00:00Z' } }] }],
       changes: [{ type: 'set-field', modelId: 'existing', scope: 'models', index: 0, field: 'maxTokens', value: 1000 }], warnings: [],
     }

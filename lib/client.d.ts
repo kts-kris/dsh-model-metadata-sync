@@ -47,7 +47,7 @@ export interface PresentedPreview {
   revision: unknown;
   expiresAt: string;
   selectedNewIds: string[];
-  items: { modelId: string; existing: boolean; reason: string; fields: PreviewField[] }[];
+  items: { modelId: string; existing: boolean | null; reason: string; fields: PreviewField[] }[];
   changes: ({ type: 'add-model'; modelId: string } | {
     type: 'set-field'; modelId: string; field: string; scope: string; index?: number; value: string;
   })[];
