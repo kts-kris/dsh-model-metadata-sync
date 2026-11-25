@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -171,14 +172,81 @@ test('release check rejects a package omitting a required locale', () => withOff
   assert.match(output, /packed tree: missing packed file locale\/(?:en|zh)\.json/i)
 }))
 
-test('a syntactically valid client still cannot bypass unfinished authority or isolated lifecycle', () => withOfflineNpm(env => {
+test('release check reports missing real Schema as T40 inconclusive, never as a legacy authority failure', () => withOfflineNpm(env => {
   const dir = fixture(env)
   writeFileSync(path.join(dir, 'test', 'passes.test.js'), `import test from 'node:test'\ntest('executed', () => {})\n`)
   const result = runFixture(dir, env)
   const output = result.stdout + result.stderr
   assert.notEqual(result.status, 0, output)
-  assert.match(output, /T40 metadata authority unavailable/i)
+  assert.match(output, /T40.*INCONCLUSIVE.*@deepseek-ai\/schemastery/i)
+  assert.doesNotMatch(output, /T40 metadata authority unavailable \(actual registered routes\)/i)
   assert.match(output, /T49 real DSH.*INCONCLUSIVE/i)
+}))
+
+// Copy only the installed, real package entry points into the owned fixture.
+// If this runtime has no usable real Schema, the release check must report that
+// limitation; a substitute schema must never turn the business probe green.
+function copyRealSchema(dir) {
+  const sources = [createRequire(import.meta.url)]
+  const globalDsh = path.resolve(path.dirname(process.execPath), '../lib/node_modules/@deepseek-ai/dsh/package.json')
+  sources.push(createRequire(globalDsh))
+  let source
+  for (const require of sources) {
+    try {
+      const schema = require.resolve('@deepseek-ai/schemastery/package.json')
+      const cosmokit = createRequire(schema).resolve('@deepseek-ai/cosmokit/package.json')
+      source = { schema: path.dirname(realpathSync(schema)), cosmokit: path.dirname(realpathSync(cosmokit)) }
+      break
+    } catch (error) {
+      if (error.code !== 'MODULE_NOT_FOUND') throw error
+    }
+  }
+  if (!source) return false
+  for (const [name, origin, files] of [
+    ['schemastery', source.schema, ['package.json', 'lib/index.mjs']],
+    ['cosmokit', source.cosmokit, ['package.json', 'lib/index.js']],
+  ]) {
+    const dest = path.join(dir, 'node_modules', '@deepseek-ai', name)
+    mkdirSync(path.join(dest, 'lib'), { recursive: true })
+    for (const file of files) {
+      const input = path.join(origin, file)
+      assert.ok(lstatSync(input).isFile() && realpathSync(input).startsWith(`${origin}${path.sep}`))
+      cpSync(input, path.join(dest, file))
+    }
+  }
+  return true
+}
+
+test('release check exercises production index.apply with exact authorized fake-Host write', t => withOfflineNpm(env => {
+  const dir = fixture(env)
+  writeFileSync(path.join(dir, 'test', 'passes.test.js'), `import test from 'node:test'\ntest('executed', () => {})\n`)
+  const available = copyRealSchema(dir)
+  const result = runFixture(dir, env)
+  const output = result.stdout + result.stderr
+  assert.notEqual(result.status, 0, output) // T49 remains unverified
+  assert.match(output, /T49 real DSH.*INCONCLUSIVE/i)
+  if (!available) {
+    assert.match(output, /T40.*INCONCLUSIVE.*@deepseek-ai\/schemastery/i)
+    t.diagnostic('INCONCLUSIVE: real Schema unavailable; no T40 business proof')
+    return
+  }
+  assert.match(output, /T40 production index\.apply fake-Host business probe passed/i)
+  assert.doesNotMatch(output, /T40 production index\.apply fake-Host business probe (?:failed|INCONCLUSIVE)/i)
+  assert.match(output, /T40.*(?:overall|real Host).*INCONCLUSIVE/i)
+
+  // Break the production entry in the owned fixture. A probe of a standalone
+  // route helper would still succeed and must not satisfy this regression test.
+  const entry = path.join(dir, 'lib', 'index.js')
+  const original = readFileSync(entry, 'utf8')
+  const changed = original.replace('export function apply(ctx, config) {',
+    "export function apply(ctx, config) { throw Error('synthetic entry failure');")
+  assert.notEqual(changed, original)
+  writeFileSync(entry, changed)
+  const broken = runFixture(dir, env)
+  const brokenOutput = broken.stdout + broken.stderr
+  assert.notEqual(broken.status, 0, brokenOutput)
+  assert.match(brokenOutput, /T40.*(?:FAIL|failed|inconclusive)/i)
+  assert.doesNotMatch(brokenOutput, /T40 production index\.apply fake-Host business probe passed/i)
 }))
 
 test('the locally packed tarball contains executable named behavioral tests', () => withOfflineNpm(env => {

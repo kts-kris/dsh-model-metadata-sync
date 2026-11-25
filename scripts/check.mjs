@@ -1,7 +1,10 @@
 // Local, offline release gate. It does not publish or install anything.
 // A successful syntax/pack run is not evidence of the real DSH lifecycle.
 import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { syncBuiltinESMExports } from 'node:module'
+import { Readable } from 'node:stream'
 import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -162,28 +165,160 @@ function checkTests(env) {
   } catch (error) { fail(`test evidence: ${error.message}`) }
 }
 
-async function checkAuthority() {
+async function checkAuthority(env) {
+  // No production network boundary is allowed during this local probe. Patch
+  // before importing the entry, and refuse even accidental worker creation.
+  // The only accepted fetch is a fixed in-memory synthetic catalog.
+  const originals = []
+  const blocked = []
+  function deny() { blocked.push('network/worker'); throw Error('offline probe forbids network or workers') }
+  let dispose
+  const oldFetch = globalThis.fetch
+  const oldEnv = { ...process.env }
   try {
-    const { registerHttpApi } = await import(pathToFileURL(regularFile('lib/http.js')).href)
-    const routes = []
-    registerHttpApi({ webServer: { register: route => { routes.push(route); return () => {} } },
-      webApp: { getAdvertisedUrl: () => 'http://127.0.0.1:31843' } }, {})
-    const unavailable = []
-    for (const suffix of ['/preview', '/apply', '/preview/cancel', '/status', '/reference-settings']) {
-      const route = routes.find(item => item.path === `/dsh-model-metadata-sync${suffix}`)
-      if (!route) { unavailable.push(`${suffix}:missing`); continue }
-      let code = 0
-      let body = ''
-      const res = { writeHead(status) { code = status; return this }, end(value = '') { body += value; return this } }
-      await route.handler({ method: 'GET', headers: {}, socket: { remoteAddress: '127.0.0.1' } }, res,
-        { principal: { kind: 'owner' }, signal: { aborted: false } })
-      let parsed
-      try { parsed = JSON.parse(body) } catch { parsed = null }
-      if (code === 503 && parsed?.error?.code === 'AUTHORITY_UNAVAILABLE') unavailable.push(suffix)
+    for (const key of Object.keys(process.env)) delete process.env[key]
+    Object.assign(process.env, env, { DSH_HOME: env.HOME, DSH_DATA_DIR: env.HOME,
+      XDG_DATA_HOME: env.HOME, XDG_CONFIG_HOME: env.HOME, XDG_CACHE_HOME: env.HOME, TMPDIR: env.HOME })
+    for (const [name, methods] of [
+      ['node:http', ['request', 'get']], ['node:https', ['request', 'get']],
+      ['node:net', ['connect', 'createConnection']], ['node:tls', ['connect']],
+      ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6']], ['node:dgram', ['createSocket']],
+      ['node:worker_threads', ['Worker']],
+    ]) {
+      const module = (await import(name)).default
+      for (const method of methods) { originals.push([module, method, module[method]]); module[method] = deny }
     }
-    if (unavailable.length) fail(`T40 metadata authority unavailable (actual registered routes): ${unavailable.join(', ')}`)
-    else info('T40 route stubs were not observed; a probe alone is not end-to-end proof')
-  } catch (error) { fail(`T40 route probe inconclusive: ${error.message}`) }
+    syncBuiltinESMExports()
+    globalThis.fetch = deny
+    let plugin
+    try { plugin = await import(pathToFileURL(regularFile('lib/index.js')).href) }
+    catch (error) {
+      if (error.code === 'ERR_MODULE_NOT_FOUND' && /@deepseek-ai\/schemastery/.test(error.message)) {
+        fail('T40 production index.apply fake-Host business probe INCONCLUSIVE: real @deepseek-ai/schemastery is unavailable')
+        return
+      }
+      throw error
+    }
+    assert.equal(typeof plugin.apply, 'function')
+    const endpoint = 'https://relay.example.invalid/private/v1'
+    const origin = 'http://127.0.0.1:31843'
+    const key = 'SYNTHETIC_TOKEN'
+    const bearer = 'synthetic-only-bearer-79251'
+    const before = { providers: { sample: { api: 'openai-completions', baseURL: endpoint, apiKeyEnv: key,
+      models: [{ id: 'old', input: null, reasoningEfforts: false, opaque: { keep: false } }] } }, unrelated: { keep: null } }
+    const state = { revision: 7, user: structuredClone(before), writes: [], requests: [] }
+    const services = {
+      llm: { listConfigurableProviders: () => [{ provider: 'sample', settingsNs: 'llm-fixture', settingsPath: ['providers', 'sample'] }] },
+      settings: {
+        describe: () => [{ ns: 'llm-fixture', revision: state.revision, applies: 'live', secrets: [],
+          user: structuredClone(state.user), value: structuredClone(state.user), base: { providers: { sample: {} } } }],
+        async mutate(namespace, operations, revision) {
+          assert.equal(namespace, 'llm-fixture')
+          assert.equal(revision, 7)
+          assert.deepEqual(operations, [{ op: 'set', path: ['providers', 'sample', 'models', '1'], value: { id: 'chosen' } }])
+          state.writes.push({ namespace, operations: structuredClone(operations), revision })
+          state.user.providers.sample.models.push({ id: 'chosen' })
+          state.revision++
+        },
+      },
+      credentials: { resolve: async ref => { assert.equal(ref, key); return { value: bearer } } },
+      pluginManager: { listPlugins: async () => [] },
+    }
+    globalThis.fetch = async (url, options) => {
+      assert.equal(String(url), `${endpoint}/models`)
+      assert.equal(options.method, 'GET')
+      assert.equal(new Headers(options.headers).get('authorization'), `Bearer ${bearer}`)
+      state.requests.push(String(url))
+      return new Response(JSON.stringify({ data: [{ id: 'old' }, { id: 'chosen' }, { id: 'ignored' }] }),
+        { headers: { 'content-type': 'application/json' } })
+    }
+    const routes = new Map()
+    const ctx = {
+      get: name => services[name],
+      webApp: { getAdvertisedUrl: () => origin },
+      webServer: { register(route) {
+        assert.equal(routes.has(route.path), false, `duplicate route ${route.path}`)
+        routes.set(route.path, route)
+        return () => routes.delete(route.path)
+      } },
+      effect(fn) { assert.equal(dispose, undefined); dispose = fn() },
+    }
+    plugin.apply(ctx, { referenceEnabled: false })
+    assert.equal(typeof dispose, 'function')
+    const owner = { principal: { kind: 'owner' }, signal: new AbortController().signal }
+    const prefix = '/dsh-model-metadata-sync'
+    for (const suffix of ['/preview', '/apply', '/preview/cancel', '/status', '/reference-settings']) {
+      assert.equal(routes.get(prefix + suffix)?.auth, 'required', suffix)
+    }
+    async function call(suffix, body, { peer = owner, originHeader = origin, site = 'same-origin' } = {}) {
+      const req = Readable.from([Buffer.from(JSON.stringify(body))])
+      Object.assign(req, { method: 'POST', headers: { origin: originHeader, 'sec-fetch-site': site, 'content-type': 'application/json' } })
+      const response = { text: '' }
+      const res = { writeHead(status, headers) { response.status = status; response.headers = headers; return this },
+        end(value = '') { response.text += value; return this } }
+      await routes.get(prefix + suffix).handler(req, res, peer)
+      response.body = JSON.parse(response.text)
+      return response
+    }
+    for (const [options, status, code] of [
+      [{ peer: null }, 401, 'AUTH_REQUIRED'],
+      [{ peer: { principal: { kind: 'guest' }, signal: new AbortController().signal } }, 403, 'AUTH_REQUIRED'],
+      [{ originHeader: 'https://attacker.invalid' }, 403, 'ORIGIN_REFUSED'],
+      [{ site: 'cross-site' }, 403, 'ORIGIN_REFUSED'],
+    ]) {
+      const result = await call('/preview', { provider: 'sample', selectedNewIds: ['chosen'] }, options)
+      assert.equal(result.status, status)
+      assert.equal(result.body.error.code, code)
+    }
+    assert.deepEqual(state.requests, [])
+    assert.deepEqual(state.writes, [])
+    const preview = await call('/preview', { provider: 'sample', selectedNewIds: ['chosen'] })
+    assert.equal(preview.status, 200)
+    assert.equal(preview.headers['cache-control'], 'no-store')
+    assert.equal(preview.body.writeEnabled, true)
+    assert.deepEqual(preview.body.changes, [{ type: 'add-model', modelId: 'chosen' }])
+    assert.deepEqual(state.user, before)
+    const input = { previewId: preview.body.previewId, digest: preview.body.digest }
+    const denied = await call('/apply', input, { originHeader: 'https://attacker.invalid' })
+    assert.equal(denied.status, 403)
+    assert.equal(denied.body.error.code, 'ORIGIN_REFUSED')
+    assert.deepEqual(state.writes, [])
+    const applied = await call('/apply', input)
+    assert.equal(applied.status, 200)
+    assert.equal(applied.body.status, 'applied')
+    assert.deepEqual(state.user, { providers: { sample: { ...before.providers.sample,
+      models: [...before.providers.sample.models, { id: 'chosen' }] } }, unrelated: { keep: null } })
+    assert.equal(state.writes.length, 1)
+    const replay = await call('/apply', input)
+    assert.equal(replay.status, 409)
+    assert.equal(replay.body.error.code, 'REPREVIEW_REQUIRED')
+    const cancelPreview = await call('/preview', { provider: 'sample', selectedNewIds: ['ignored'] })
+    assert.equal(cancelPreview.status, 200)
+    assert.deepEqual(cancelPreview.body.changes, [{ type: 'add-model', modelId: 'ignored' }])
+    const cancel = await call('/preview/cancel', { previewId: cancelPreview.body.previewId })
+    assert.equal(cancel.status, 200)
+    assert.equal(cancel.body.status, 'cancelled')
+    const cancelledApply = await call('/apply', { previewId: cancelPreview.body.previewId, digest: cancelPreview.body.digest })
+    assert.equal(cancelledApply.status, 409)
+    assert.equal(cancelledApply.body.error.code, 'REPREVIEW_REQUIRED')
+    assert.equal(state.writes.length, 1)
+    assert.deepEqual(blocked, [])
+    for (const text of [preview.text, applied.text, cancelPreview.text, cancel.text]) {
+      for (const secret of [endpoint, key, bearer]) assert.equal(text.includes(secret), false)
+    }
+    dispose(); dispose = undefined
+    assert.equal(routes.size, 0)
+    info('T40 production index.apply fake-Host business probe passed: auth/CSRF, exact append, replay and cancel; no real Host or network claim')
+  } catch (error) {
+    fail(`T40 production index.apply fake-Host business probe failed: ${error.message}`)
+  } finally {
+    try { dispose?.() } catch { fail('T40 production route cleanup unconfirmed') }
+    globalThis.fetch = oldFetch
+    for (const [module, method, value] of originals.reverse()) module[method] = value
+    syncBuiltinESMExports()
+    for (const key of Object.keys(process.env)) delete process.env[key]
+    Object.assign(process.env, oldEnv)
+  }
 }
 
 const temporaryRoot = realpathSync(tmpdir())
@@ -203,7 +338,10 @@ try {
   const packed = checkPackedTree(env)
   checkSyntax(packed, env)
   checkTests(env)
-  await checkAuthority()
+  await checkAuthority(env)
+  // A selected-ID fake-Host append cannot prove metadata field acceptance,
+  // production authentication, real settings or the full specification.
+  fail('T40 overall metadata fields and real Host behavior: INCONCLUSIVE; fake-Host append is not complete acceptance evidence')
   // T49/T50 require a separate disposable real DSH installation and a checked
   // evidence review. A fake Host or a skipped carrier test cannot replace that.
   fail('T49 real DSH install/enable/load/unload/restart: INCONCLUSIVE; not run by this offline check; no release authorized')
